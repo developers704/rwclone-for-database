@@ -347,8 +347,14 @@ SELECT
     ) AS [Description-Name],
     COALESCE(CONVERT(NVARCHAR(50), i.SellingPrice), N'') AS [Tag Price],
     COALESCE(CONVERT(NVARCHAR(150), vm.VMLevelCat2), N'') AS [99-Price],
-    CAST(N'' AS NVARCHAR(150)) AS [Category],
-    COALESCE(ist.InvCat1ValueCode, N'') AS [Subcategory-Department],
+    COALESCE(
+        NULLIF(LTRIM(RTRIM(ist.InvCat4ValueCode)), N''),
+        N'Unknown Category'
+    ) AS [Category],
+    COALESCE(
+        NULLIF(LTRIM(RTRIM(ist.InvCat1ValueCode)), N''),
+        N'Unknown SubCategory'
+    ) AS [Subcategory-Department],
     COALESCE(
         CASE
             WHEN UPPER(LTRIM(RTRIM(ist.InvCat4ValueCode))) = N'LINKNLOCK'

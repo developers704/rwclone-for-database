@@ -179,7 +179,7 @@ SplitGroups AS (
     GROUP BY TranID, TranType
 )
 SELECT
-    b.TransactionCode AS [Transaction #],
+    COALESCE(CONVERT(NVARCHAR(150), b.TransactionCode), N'') AS [Transaction #],
     CONVERT(VARCHAR(2), MONTH(b.TransactionDate)) + '/' +
     CONVERT(VARCHAR(2), DAY(b.TransactionDate)) + '/' +
     CONVERT(VARCHAR(4), YEAR(b.TransactionDate)) AS [Transaction Date],
@@ -196,8 +196,8 @@ SELECT
     COALESCE(NULLIF(b.LineDescription, ''),
              NULLIF(it.ItemName, ''), it.ItemDesc, '') AS [Description],
     COALESCE(NULLIF(it.IVendorModel, ''),
-             NULLIF(st.VendorModel, '')) AS [VendorModel1],
-    st.VendorCode AS [Vendor Name],
+             NULLIF(st.VendorModel, ''), N'') AS [VendorModel1],
+    COALESCE(st.VendorCode, N'') AS [Vendor Name],
     CAST(ROUND(b.BaseQuantity * rate.Factor, 2)
          AS DECIMAL(19,2)) AS [Qty],
     CAST(b.ItemCost AS DECIMAL(19,2)) AS [Inventory Cost],
@@ -209,14 +209,14 @@ SELECT
          AS DECIMAL(19,2)) AS [Disc Amt],
     CAST(ROUND((b.BaseUnitPrice * b.BaseQuantity - b.BaseDiscount)
                * rate.Factor, 2) AS DECIMAL(19,2)) AS [Total],
-    w.WarehouseCode AS [Store],
-    st.InvCat1ValueCode AS [Department],
-    st.InvCat4ValueCode AS [Design],
-    st.InvCat2ValueCode AS [Class],
-    st.InvCat3ValueCode AS [Sub-Class],
-    COALESCE(NULLIF(b.LineImagePath, ''), image1.ImagePath1)
+    COALESCE(w.WarehouseCode, N'') AS [Store],
+    COALESCE(st.InvCat1ValueCode, N'') AS [Department],
+    COALESCE(st.InvCat4ValueCode, N'') AS [Design],
+    COALESCE(st.InvCat2ValueCode, N'') AS [Class],
+    COALESCE(st.InvCat3ValueCode, N'') AS [Sub-Class],
+    COALESCE(NULLIF(b.LineImagePath, ''), NULLIF(image1.ImagePath1, ''), N'')
         AS [Image Dir.],
-    it.ItemAvgWeight AS [AvgWeight],
+    COALESCE(CONVERT(VARCHAR(50), it.ItemAvgWeight), '') AS [AvgWeight],
     CASE
         WHEN COALESCE(NULLIF(pay.Codes, ''),
                       NULLIF(hpc.PayCode, '')) IS NULL THEN ''

@@ -2,7 +2,7 @@ namespace VallianiDataSync.Infrastructure.Destinations;
 
 /// <summary>
 /// JewelMate payment report. Placeholders {{StartDate}} / {{EndDate}} (both inclusive;
-/// SQL uses PostedDate &lt; EndDate+1).
+/// SQL uses PostedDate &lt; EndDate+1). NULLs exported as blank strings.
 /// </summary>
 public static class CaratonePaymentSql
 {
@@ -48,6 +48,7 @@ ReportRows AS
     SELECT
         p.PaymentID,
         p.ReceiptCode,
+
         s.SiteCode AS [Store],
         c.CustomerCode AS [Customer #],
         c.CustomerName AS [Customer Name],
@@ -136,27 +137,68 @@ ReportRows AS
 )
 
 SELECT
-    [Store],
-    [Customer #],
-    [Customer Name],
-    [Transaction #],
-    [Transaction Date],
-    [Type],
-    [Pymt Create Date],
-    [Pymt Posted Date],
-    [Pay Method],
-    [Pay Code],
-    [Check Card # GC #],
-    [Card Holder],
+    COALESCE(CONVERT(NVARCHAR(MAX), [Store]), N'')
+        AS [Store],
 
-    CASE
-        WHEN PaymentRowNumber = 1 THEN PayAmount
-        ELSE 0
-    END AS [Payment Amt],
+    COALESCE(CONVERT(NVARCHAR(MAX), [Customer #]), N'')
+        AS [Customer #],
 
-    COALESCE(AppliedAmt, 0) AS [Applied Amt],
+    COALESCE(CONVERT(NVARCHAR(MAX), [Customer Name]), N'')
+        AS [Customer Name],
 
-    ACPercentage AS [SplitPercentage]
+    COALESCE(CONVERT(NVARCHAR(MAX), [Transaction #]), N'')
+        AS [Transaction #],
+
+    COALESCE(
+        CONVERT(VARCHAR(10), [Transaction Date], 23),
+        ''
+    ) AS [Transaction Date],
+
+    COALESCE([Type], '')
+        AS [Type],
+
+    COALESCE(
+        CONVERT(VARCHAR(10), [Pymt Create Date], 23),
+        ''
+    ) AS [Pymt Create Date],
+
+    COALESCE(
+        CONVERT(VARCHAR(10), [Pymt Posted Date], 23),
+        ''
+    ) AS [Pymt Posted Date],
+
+    COALESCE(CONVERT(NVARCHAR(MAX), [Pay Method]), N'')
+        AS [Pay Method],
+
+    COALESCE(CONVERT(NVARCHAR(MAX), [Pay Code]), N'')
+        AS [Pay Code],
+
+    COALESCE(CONVERT(NVARCHAR(MAX), [Check Card # GC #]), N'')
+        AS [Check Card # GC #],
+
+    COALESCE(CONVERT(NVARCHAR(MAX), [Card Holder]), N'')
+        AS [Card Holder],
+
+    COALESCE(
+        CONVERT(
+            VARCHAR(50),
+            CASE
+                WHEN PaymentRowNumber = 1 THEN PayAmount
+                ELSE 0
+            END
+        ),
+        ''
+    ) AS [Payment Amt],
+
+    COALESCE(
+        CONVERT(VARCHAR(50), AppliedAmt),
+        ''
+    ) AS [Applied Amt],
+
+    COALESCE(
+        CONVERT(VARCHAR(50), ACPercentage),
+        ''
+    ) AS [SplitPercentage]
 
 FROM ReportRows
 
