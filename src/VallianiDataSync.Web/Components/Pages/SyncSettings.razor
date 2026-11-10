@@ -1,0 +1,90 @@
+@page "/sync"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISettingsService Settings
+
+<PageTitle>Sync Settings</PageTitle>
+
+<h1 class="page-title">Sync Settings</h1>
+<p class="page-sub">Automatic schedule for the built-in product API sync engine.</p>
+
+<div class="check-row">
+    <label><input type="checkbox" @bind="ManualOnly" /> Manual only</label>
+    <label><input type="checkbox" @bind="AutomaticEnabled" /> Automatic enabled</label>
+</div>
+
+<label class="field-label">Interval (minutes)</label>
+<input type="number" @bind="IntervalMinutes" />
+
+<div class="check-row">
+    <label><input type="checkbox" @bind="UseDaily" /> Use daily schedule</label>
+</div>
+<label class="field-label">Daily at (HH:mm)</label>
+<input type="text" @bind="DailyAt" />
+
+<div class="check-row">
+    <label><input type="checkbox" @bind="FullByDefault" /> Full sync by default</label>
+    <label><input type="checkbox" @bind="SyncProducts" /> Products</label>
+    <label><input type="checkbox" @bind="SyncInventory" /> Inventory</label>
+    <label><input type="checkbox" @bind="SyncPrices" /> Prices</label>
+    <label><input type="checkbox" @bind="SyncImages" /> Images</label>
+</div>
+
+<label class="field-label">Batch size</label>
+<input type="number" @bind="BatchSize" />
+<label class="field-label">Selected store code (empty = all)</label>
+<input type="text" @bind="StoreCode" />
+
+<div class="btn-row">
+    <button class="btn btn-primary" @onclick="Save">Save</button>
+</div>
+<p class="status">@Status</p>
+
+@code {
+    bool ManualOnly = true, AutomaticEnabled, UseDaily, FullByDefault;
+    bool SyncProducts = true, SyncInventory = true, SyncPrices = true, SyncImages = true;
+    int IntervalMinutes = 15, BatchSize = 200;
+    string DailyAt = "02:00", StoreCode = "", Status = "";
+
+    protected override void OnInitialized()
+    {
+        var sync = Settings.Current.Sync;
+        ManualOnly = sync.ManualOnly;
+        AutomaticEnabled = sync.AutomaticEnabled;
+        IntervalMinutes = sync.IntervalMinutes;
+        UseDaily = sync.UseDailySchedule;
+        DailyAt = sync.DailyAtLocalTime?.ToString(@"hh\:mm") ?? "02:00";
+        FullByDefault = sync.DefaultMode == SyncMode.Full;
+        SyncProducts = sync.Channels.HasFlag(SyncChannels.Products);
+        SyncInventory = sync.Channels.HasFlag(SyncChannels.Inventory);
+        SyncPrices = sync.Channels.HasFlag(SyncChannels.Prices);
+        SyncImages = sync.Channels.HasFlag(SyncChannels.Images);
+        BatchSize = sync.BatchSize;
+        StoreCode = sync.SelectedStoreCode ?? "";
+    }
+
+    async Task Save()
+    {
+        TimeSpan? daily = TimeSpan.TryParse(DailyAt, out var p) ? p : null;
+        var channels = SyncChannels.None;
+        if (SyncProducts) channels |= SyncChannels.Products;
+        if (SyncInventory) channels |= SyncChannels.Inventory;
+        if (SyncPrices) channels |= SyncChannels.Prices;
+        if (SyncImages) channels |= SyncChannels.Images;
+
+        Settings.Update(s =>
+        {
+            s.Sync.ManualOnly = ManualOnly;
+            s.Sync.AutomaticEnabled = AutomaticEnabled;
+            s.Sync.IntervalMinutes = Math.Max(1, IntervalMinutes);
+            s.Sync.UseDailySchedule = UseDaily;
+            s.Sync.DailyAtLocalTime = daily;
+            s.Sync.DefaultMode = FullByDefault ? SyncMode.Full : SyncMode.Incremental;
+            s.Sync.Channels = channels;
+            s.Sync.BatchSize = Math.Clamp(BatchSize, 1, 2000);
+            s.Sync.SelectedStoreCode = string.IsNullOrWhiteSpace(StoreCode) ? null : StoreCode.Trim();
+        });
+        await Settings.SaveAsync();
+        Status = "Synchronization settings saved.";
+    }
+}

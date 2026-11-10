@@ -1,0 +1,9 @@
+{
+  "fields": [
+    { "destinationKey": "sku", "sourceField": "Sku" },
+    { "destinationKey": "title", "sourceField": "Name" },
+    { "destinationKey": "price", "sourceField": "RetailPrice" },
+    { "destinationKey": "image", "sourceField": "ImagePath" },
+    { "destinationKey": "metal", "sourceField": "Metal" }
+  ]
+}

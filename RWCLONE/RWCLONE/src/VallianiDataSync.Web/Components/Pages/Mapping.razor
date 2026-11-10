@@ -1,0 +1,204 @@
+@page "/mapping"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISettingsService Settings
+@inject IProductRepository Products
+
+<PageTitle>Data Mapping</PageTitle>
+
+<h1 class="page-title">Data Mapping</h1>
+<p class="page-sub">Enable Sync all tables → Save → Destinations Sync Now sends EVERY table in the database (2600+ supported).</p>
+
+<label class="check-row">
+    <input type="checkbox" @bind="SyncAllTables" />
+    Sync ALL database tables (auto-discover at sync time — no need to tick 2600 names)
+</label>
+
+<div class="btn-row" style="margin-top:12px">
+    <button class="btn btn-primary" @onclick="LoadAllTables">Load all tables</button>
+    <button class="btn btn-secondary" @onclick="SelectAllTables">Select all</button>
+    <button class="btn btn-secondary" @onclick="ClearAllTables">Clear all</button>
+</div>
+
+@if (Tables.Count > 0)
+{
+    <p class="field-label" style="margin-top:12px">Tables to sync (@Tables.Count(t => t.Selected)/@Tables.Count selected)</p>
+    <div class="table-pick">
+        @foreach (var t in Tables)
+        {
+            <label class="check-row"><input type="checkbox" @bind="t.Selected" /> @t.Name</label>
+        }
+    </div>
+}
+
+<label class="field-label" style="margin-top:16px">Products table (field mapping only)</label>
+<input type="text" @bind="ProductsTable" />
+<label class="field-label">Modified-at column</label>
+<input type="text" @bind="ModifiedAtColumn" />
+
+<div class="btn-row">
+    <button class="btn btn-secondary" @onclick="LoadColumns">Load columns A→Z</button>
+    <button class="btn btn-primary" @onclick="Save">Save</button>
+</div>
+<p class="status">@Status</p>
+
+@if (Rows.Count > 0)
+{
+    <table class="table">
+        <thead><tr><th>Logical field</th><th>Column</th></tr></thead>
+        <tbody>
+        @foreach (var row in Rows)
+        {
+            <tr>
+                <td>@row.Logical</td>
+                <td>
+                    <select @bind="row.Column" style="max-width:100%;margin:0">
+                        <option value=""></option>
+                        @foreach (var c in Discovered)
+                        {
+                            <option value="@c">@c</option>
+                        }
+                    </select>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    sealed class Row { public string Logical { get; set; } = ""; public string Column { get; set; } = ""; }
+    sealed class TablePick { public string Name { get; set; } = ""; public bool Selected { get; set; } = true; }
+
+    string ProductsTable = "products", ModifiedAtColumn = "", Status = "";
+    bool SyncAllTables = true;
+    List<Row> Rows = new();
+    List<string> Discovered = new();
+    List<TablePick> Tables = new();
+
+    protected override void OnInitialized()
+    {
+        var mapping = Settings.Current.Mapping;
+        ProductsTable = mapping.ProductsTable ?? "products";
+        ModifiedAtColumn = mapping.ModifiedAtColumn ?? "";
+        SyncAllTables = mapping.SyncAllTables;
+        Discovered = mapping.DiscoveredColumns.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        var selected = new HashSet<string>(mapping.SelectedTables, StringComparer.OrdinalIgnoreCase);
+        Tables = mapping.DiscoveredTables
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .Select(t => new TablePick { Name = t, Selected = selected.Count == 0 || selected.Contains(t) })
+            .ToList();
+        var keys = new FieldMappingConfig().Columns.Keys
+            .Concat(mapping.Columns.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(k => k);
+        Rows = keys.Select(k =>
+        {
+            mapping.Columns.TryGetValue(k, out var col);
+            return new Row { Logical = k, Column = col ?? "" };
+        }).ToList();
+    }
+
+    async Task LoadAllTables()
+    {
+        try
+        {
+            Status = "Loading tables…";
+            var tables = await Products.ListTablesAsync();
+            if (tables.Count == 0)
+            {
+                Status = "No tables found. Check Database connection.";
+                return;
+            }
+            Tables = tables.Select(t => new TablePick { Name = t, Selected = true }).ToList();
+            SyncAllTables = true;
+            Settings.Update(s =>
+            {
+                s.Mapping.DiscoveredTables = tables.ToList();
+                s.Mapping.SelectedTables = tables.ToList();
+                s.Mapping.SyncAllTables = true;
+            });
+            await Settings.SaveAsync();
+            Status = $"Loaded {tables.Count} tables. All selected. Click Save if you change selection, then Destinations → Sync Now.";
+        }
+        catch (Exception ex) { Status = "Failed: " + ex.Message; }
+    }
+
+    void SelectAllTables()
+    {
+        foreach (var t in Tables) t.Selected = true;
+    }
+
+    void ClearAllTables()
+    {
+        foreach (var t in Tables) t.Selected = false;
+    }
+
+    async Task LoadColumns()
+    {
+        try
+        {
+            Status = "Loading columns…";
+            var table = string.IsNullOrWhiteSpace(ProductsTable) ? "products" : ProductsTable.Trim();
+            var cols = await Products.ListTableColumnsAsync(table);
+            if (cols.Count == 0)
+            {
+                Status = $"No columns for '{table}'.";
+                return;
+            }
+            Discovered = cols.ToList();
+            AutoMap(cols);
+            if (cols.Any(c => c.Equals("updated_at", StringComparison.OrdinalIgnoreCase)) && string.IsNullOrWhiteSpace(ModifiedAtColumn))
+                ModifiedAtColumn = "updated_at";
+            await Persist(save: true);
+            Status = $"Loaded {cols.Count} columns from '{table}'.";
+        }
+        catch (Exception ex) { Status = "Failed: " + ex.Message; }
+    }
+
+    void AutoMap(IReadOnlyList<string> cols)
+    {
+        var set = cols.ToDictionary(c => c, c => c, StringComparer.OrdinalIgnoreCase);
+        void Map(string logical, params string[] candidates)
+        {
+            var row = Rows.FirstOrDefault(r => r.Logical.Equals(logical, StringComparison.OrdinalIgnoreCase));
+            if (row is null) return;
+            foreach (var c in candidates)
+                if (set.TryGetValue(c, out var real)) { row.Column = real; return; }
+        }
+        Map("Sku", "sku", "SKU");
+        Map("ItemNumber", "vendor_model", "item_number");
+        Map("Name", "description", "name", "title");
+        Map("RetailPrice", "price", "retail_price");
+        Map("Quantity", "quantity", "qty");
+        Map("Store", "store", "store_code");
+        Map("ImagePath", "image_url", "image");
+    }
+
+    async Task Save()
+    {
+        await Persist(true);
+        Status = SyncAllTables
+            ? "Saved. Sync all tables ON — Destinations Sync Now will discover and send EVERY table in the database (e.g. 2600+)."
+            : $"Saved. {Tables.Count(t => t.Selected)} selected table(s) will sync.";
+    }
+
+    async Task Persist(bool save)
+    {
+        var selected = Tables.Where(t => t.Selected).Select(t => t.Name).ToList();
+        Settings.Update(s =>
+        {
+            s.Mapping.ProductsTable = ProductsTable.Trim();
+            s.Mapping.ModifiedAtColumn = string.IsNullOrWhiteSpace(ModifiedAtColumn) ? null : ModifiedAtColumn.Trim();
+            s.Mapping.DiscoveredColumns = Discovered.ToList();
+            s.Mapping.DiscoveredTables = Tables.Select(t => t.Name).ToList();
+            // When SyncAllTables: clear SelectedTables so sync rediscovers all DB tables at runtime
+            s.Mapping.SyncAllTables = SyncAllTables;
+            s.Mapping.SelectedTables = SyncAllTables ? new List<string>() : selected;
+            s.Mapping.Columns = Rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.Column))
+                .ToDictionary(r => r.Logical, r => r.Column.Trim(), StringComparer.OrdinalIgnoreCase);
+        });
+        if (save) await Settings.SaveAsync();
+    }
+}

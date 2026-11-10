@@ -1,0 +1,78 @@
+<UserControl x:Class="VallianiDataSync.App.Views.DataMappingView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer>
+    <StackPanel>
+      <TextBlock Text="Data Mapping" Style="{StaticResource SectionTitle}"/>
+      <TextBlock Text="Optional: Load tables / Setup sales+inventory+payments. Destinations screen selects sources + fields per project."
+                 Style="{StaticResource SectionSubtitle}"/>
+
+      <CheckBox Content="Sync ALL database tables (ignore checklist — sync every table)"
+                IsChecked="{Binding SyncAllTables}" Margin="0,0,0,8"/>
+
+      <WrapPanel Margin="0,0,0,8">
+        <Button Content="Load all tables" Style="{StaticResource PrimaryButton}" Command="{Binding LoadAllTablesCommand}"
+                Margin="0,0,8,8" MinHeight="40" MinWidth="140"/>
+        <Button Content="Setup inventory + sales" Style="{StaticResource PrimaryButton}" Command="{Binding SetupInventorySalesCommand}"
+                Margin="0,0,8,8" MinHeight="40" MinWidth="180"
+                ToolTip="Select sales + inventory + payments fixed SQL sources"/>
+        <Button Content="Select all" Style="{StaticResource SecondaryButton}" Command="{Binding SelectAllTablesCommand}"
+                Margin="0,0,8,8" MinHeight="40" MinWidth="110"/>
+        <Button Content="Clear all" Style="{StaticResource SecondaryButton}" Command="{Binding ClearAllTablesCommand}"
+                Margin="0,0,8,8" MinHeight="40" MinWidth="110"/>
+      </WrapPanel>
+
+      <TextBlock Text="Filter tables" Style="{StaticResource FieldLabel}"/>
+      <TextBox Text="{Binding TableFilter, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,6"/>
+      <TextBlock Text="{Binding SelectedSummary}" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+      <TextBlock Text="Sources — sales / inventory / payments use fixed SQL. Destination name blank = same name."
+                 FontWeight="SemiBold" Margin="0,4,0,6" TextWrapping="Wrap"/>
+      <DataGrid ItemsSource="{Binding Tables}" AutoGenerateColumns="False" CanUserAddRows="False"
+                Height="280" BorderBrush="{StaticResource LineBrush}" MinRowHeight="32">
+        <DataGrid.Columns>
+          <DataGridTemplateColumn Header="Sync" Width="60">
+            <DataGridTemplateColumn.CellTemplate>
+              <DataTemplate>
+                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </DataTemplate>
+            </DataGridTemplateColumn.CellTemplate>
+          </DataGridTemplateColumn>
+          <DataGridTextColumn Header="Source (table or named SQL)" Binding="{Binding TableName}" IsReadOnly="True" Width="*"/>
+          <DataGridTextColumn Header="Destination name (optional)"
+                              Binding="{Binding DestinationName, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+        </DataGrid.Columns>
+      </DataGrid>
+
+      <TextBlock Text="Products table (optional product field mapping)" Style="{StaticResource FieldLabel}" Margin="0,16,0,0"/>
+      <TextBox Text="{Binding ProductsTable, UpdateSourceTrigger=PropertyChanged}"/>
+      <TextBlock Text="Modified-at column (optional)" Style="{StaticResource FieldLabel}"/>
+      <TextBox Text="{Binding ModifiedAtColumn, UpdateSourceTrigger=PropertyChanged}"/>
+      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+        <Button Content="Load columns (selected tables)" Style="{StaticResource PrimaryButton}" Command="{Binding LoadAllColumnsCommand}" Margin="0,0,8,0"/>
+        <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"/>
+      </StackPanel>
+      <TextBlock Text="{Binding StatusMessage}" Margin="0,10,0,12" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+
+      <TextBlock Text="Columns from selected tables" FontWeight="SemiBold" Margin="0,0,0,4"/>
+      <DataGrid ItemsSource="{Binding SelectedTableColumns}" AutoGenerateColumns="False" CanUserAddRows="False"
+                Height="160" Margin="0,0,0,12" IsReadOnly="True">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="Table" Binding="{Binding TableName}" Width="*"/>
+          <DataGridTextColumn Header="Column" Binding="{Binding ColumnName}" Width="*"/>
+        </DataGrid.Columns>
+      </DataGrid>
+
+      <TextBlock Text="Merged columns (auto-mapped for sync)" FontWeight="SemiBold" Margin="0,0,0,4"/>
+      <ListBox ItemsSource="{Binding DiscoveredColumns}" Height="90" BorderBrush="{StaticResource LineBrush}" Margin="0,0,0,12"/>
+
+      <DataGrid ItemsSource="{Binding Rows}" AutoGenerateColumns="False" CanUserAddRows="False" Height="220">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="Logical field" Binding="{Binding LogicalField}" IsReadOnly="True" Width="*"/>
+          <DataGridTextColumn Header="Local column" Binding="{Binding ColumnName, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+        </DataGrid.Columns>
+      </DataGrid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

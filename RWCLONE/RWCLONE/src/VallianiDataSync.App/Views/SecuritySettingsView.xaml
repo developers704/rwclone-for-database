@@ -1,0 +1,75 @@
+<UserControl x:Class="VallianiDataSync.App.Views.SecuritySettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer>
+    <Border Style="{StaticResource SoftPanel}" MaxWidth="720" HorizontalAlignment="Left">
+      <StackPanel>
+        <TextBlock Text="Security / OTP" Style="{StaticResource SectionTitle}"/>
+        <TextBlock Text="Har email ka apna SMTP. Username = full email (shafquat@valliani.app). Password = usi email ka password. Email 2 pe dusre email ka user/password — Shafquat ka nahi."
+                   Style="{StaticResource SectionSubtitle}"/>
+
+        <Border Background="{StaticResource AccentSoftBrush}" Padding="14" CornerRadius="12" Margin="0,0,0,14">
+          <StackPanel>
+            <TextBlock Text="Admin OTP (email / IP / security save)" FontWeight="SemiBold"/>
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+              <Button Content="Send OTP" Style="{StaticResource SecondaryButton}" Command="{Binding SendSensitiveOtpCommand}" Margin="0,0,8,0"/>
+              <TextBox Width="110" Margin="0,0,8,0" Text="{Binding SensitiveOtp1, UpdateSourceTrigger=PropertyChanged}"/>
+              <TextBox Width="110" Text="{Binding SensitiveOtp2, UpdateSourceTrigger=PropertyChanged}"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <CheckBox Content="Enable dual-email OTP login" IsChecked="{Binding OtpEnabled}" Margin="0,0,0,12"/>
+
+        <TextBlock Text="Allowed IPs (one per line, empty = all)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Style="{StaticResource MultilineTextBox}" Text="{Binding AllowedIpsText, UpdateSourceTrigger=PropertyChanged}" Height="88"/>
+
+        <!-- Email 1 SMTP -->
+        <Border Background="{StaticResource AccentSoftBrush}" Padding="14" CornerRadius="12" Margin="0,8,0,12">
+          <StackPanel>
+            <TextBlock Text="Email 1 SMTP (e.g. Shafquat)" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
+            <TextBlock Text="Email 1 address" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Email1, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Host" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp1Host, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Port" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp1Port, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Username (full email: shafquat@valliani.app)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp1Username, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Password (Shafquat email password)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp1Password, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="From (auto = Email 1)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp1From, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True"/>
+            <CheckBox Content="Use SSL/TLS" IsChecked="{Binding Smtp1UseSsl}" Margin="0,4,0,0"/>
+          </StackPanel>
+        </Border>
+
+        <!-- Email 2 SMTP -->
+        <Border Background="#EEF4F8" Padding="14" CornerRadius="12" Margin="0,0,0,12">
+          <StackPanel>
+            <TextBlock Text="Email 2 SMTP (second person)" FontWeight="SemiBold" FontSize="15" Margin="0,0,0,10"/>
+            <TextBlock Text="Email 2 address" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Email2, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Host" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp2Host, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Port" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp2Port, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Username (full email: umairj@valliani.app)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp2Username, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="SMTP Password (Umair email password — Shafquat ka nahi)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp2Password, UpdateSourceTrigger=PropertyChanged}"/>
+            <TextBlock Text="From (auto = Email 2)" Style="{StaticResource FieldLabel}"/>
+            <TextBox Text="{Binding Smtp2From, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True"/>
+            <CheckBox Content="Use SSL/TLS" IsChecked="{Binding Smtp2UseSsl}" Margin="0,4,0,0"/>
+          </StackPanel>
+        </Border>
+
+        <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+          <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" Margin="0,0,10,0"/>
+          <Button Content="Send test OTP" Style="{StaticResource SecondaryButton}" Command="{Binding TestOtpCommand}"/>
+        </StackPanel>
+        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+      </StackPanel>
+    </Border>
+  </ScrollViewer>
+</UserControl>

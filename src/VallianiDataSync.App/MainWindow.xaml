@@ -1,0 +1,54 @@
+﻿<Window x:Class="VallianiDataSync.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Valliani Data Sync"
+        Height="800" Width="1240"
+        MinHeight="680" MinWidth="1020"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource AppBgGradient}">
+  <Grid>
+    <Grid Visibility="{Binding IsUnlocked, Converter={StaticResource BoolToVisibilityConverter}}">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="248"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="0" Background="{StaticResource SidebarGradient}" Padding="18,22">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top" Margin="6,0,6,28">
+            <TextBlock Text="VALLIANI" FontFamily="{StaticResource DisplayFont}" FontSize="22" FontWeight="Bold"
+                       Foreground="{StaticResource SidebarTextBrush}"/>
+            <TextBlock Text="Data Sync" FontSize="13" Foreground="{StaticResource SidebarMutedBrush}" Margin="0,2,0,0"/>
+            <Border Height="2" Background="{StaticResource AccentLineBrush}" Width="42" HorizontalAlignment="Left" Margin="0,14,0,0" CornerRadius="1"/>
+          </StackPanel>
+
+          <Button DockPanel.Dock="Bottom" Content="Lock workspace" Style="{StaticResource SidebarLockButton}"
+                  Command="{Binding LockAppCommand}" Margin="4,16,4,4"/>
+
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
+            <StackPanel>
+              <Button Content="Dashboard" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Dashboard"/>
+              <Button Content="Database" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Database"/>
+              <Button Content="Server / API" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Api"/>
+              <Button Content="Stores" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Stores"/>
+              <Button Content="Data Mapping" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Mapping"/>
+              <Button Content="Sync Settings" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Sync"/>
+              <Button Content="Images" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Images"/>
+              <TextBlock Text="ADMIN" Style="{StaticResource AdminChip}"/>
+              <Button Content="Destinations" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Destinations"/>
+              <Button Content="Security / OTP" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Security"/>
+              <Button Content="Logs" Style="{StaticResource NavButton}" Command="{Binding NavigateCommand}" CommandParameter="Logs"/>
+            </StackPanel>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Column="1" Padding="28,24">
+        <ContentControl Content="{Binding CurrentPage}"/>
+      </Border>
+    </Grid>
+
+    <ContentControl Content="{Binding Login}"
+                    Visibility="{Binding IsUnlocked, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+  </Grid>
+</Window>

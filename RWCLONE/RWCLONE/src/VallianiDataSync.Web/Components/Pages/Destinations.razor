@@ -1,0 +1,287 @@
+@page "/destinations"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISettingsService Settings
+@inject ICredentialStore Credentials
+@inject IDestinationSyncService Sync
+@inject IOtpAuthService Otp
+
+<PageTitle>Destinations</PageTitle>
+
+<h1 class="page-title">Destinations</h1>
+<p class="page-sub">Projects push mapped product fields to an external API (Shopify, custom, etc.).</p>
+
+<div class="split">
+    <div>
+        <div class="rail-title">PROJECTS</div>
+        <div class="rail-accent"></div>
+        @foreach (var p in Projects)
+        {
+            <button class="project-item @(Selected?.Id == p.Id ? "active" : null)" @onclick="() => Select(p)">
+                <div class="name">@(string.IsNullOrWhiteSpace(p.Name) ? "(unnamed)" : p.Name)</div>
+                <div class="meta">@(p.Enabled ? "Active" : "Paused")</div>
+            </button>
+        }
+        <div class="btn-row" style="flex-direction:column;align-items:stretch">
+            <button class="btn btn-primary" @onclick="AddProject">+ New project</button>
+            <button class="btn btn-secondary" @onclick="DeleteProject">Remove</button>
+        </div>
+    </div>
+    <div class="v-divider"></div>
+    <div>
+        <h2 style="font-family:var(--display);font-size:22px;margin:0 0 4px">Project setup</h2>
+        <p class="page-sub">Pick a project on the left, or create one.</p>
+
+        <div class="otp-strip">
+            <div class="bar"></div>
+            <div>
+                <strong>Admin OTP</strong>
+                <div class="btn-row" style="margin-top:8px">
+                    <button class="btn btn-secondary" @onclick="SendOtp">Send OTP</button>
+                    <input type="text" style="max-width:120px;margin:0" @bind="Sens1" />
+                    <input type="text" style="max-width:120px;margin:0" @bind="Sens2" />
+                </div>
+            </div>
+        </div>
+
+        @if (Selected is null)
+        {
+            <p class="status">No project selected.</p>
+        }
+        else
+        {
+            <label class="field-label">Name</label>
+            <input type="text" @bind="Selected.Name" />
+            <div class="check-row">
+                <label><input type="checkbox" @bind="Selected.Enabled" /> Enabled</label>
+                <label><input type="checkbox" @bind="Selected.AutoSyncEnabled" /> Auto sync</label>
+            </div>
+            <label class="field-label">Auto interval (minutes)</label>
+            <input type="number" @bind="Selected.IntervalMinutes" style="max-width:140px" />
+            <label class="field-label">API URL</label>
+            <input type="text" @bind="Selected.ApiUrl" />
+            <label class="field-label">API key / token</label>
+            <input type="password" @bind="ApiKey" />
+
+            <hr style="border:0;border-top:1px solid var(--line);margin:16px 0" />
+            <h3 style="font-size:17px;margin:0 0 4px">Format</h3>
+            <p class="status">@FormatHint</p>
+            <div class="btn-row">
+                <InputFile id="formatUpload" class="file-btn" OnChange="OnFormatUpload" accept=".json,.csv,.tsv,.txt" />
+                <button class="btn btn-secondary" @onclick="AddField">Add field</button>
+            </div>
+
+            <table class="table">
+                <thead><tr><th>Destination key</th><th>Source field</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var row in FormatRows)
+                {
+                    <tr>
+                        <td><input type="text" style="margin:0;max-width:100%" @bind="row.DestinationKey" /></td>
+                        <td>
+                            <select style="margin:0;max-width:100%" @bind="row.SourceField">
+                                @foreach (var f in SourceFields)
+                                {
+                                    <option value="@f">@f</option>
+                                }
+                            </select>
+                        </td>
+                        <td><button class="btn btn-secondary" style="height:32px" @onclick="() => FormatRows.Remove(row)">Delete</button></td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+
+            <p class="status">@Selected.LastSyncMessage</p>
+            <div class="btn-row">
+                <button class="btn btn-primary" @onclick="Save">Save</button>
+                <button class="btn btn-secondary" @onclick="() => RunSync(false)">Sync Now</button>
+                <button class="btn btn-secondary" @onclick="() => RunSync(true)">Full Sync</button>
+            </div>
+        }
+        <p class="status">@Status</p>
+    </div>
+</div>
+
+@code {
+    sealed class FormatRow
+    {
+        public string SourceField { get; set; } = "Sku";
+        public string DestinationKey { get; set; } = "sku";
+    }
+
+    List<DestinationProject> Projects = new();
+    DestinationProject? Selected;
+    List<FormatRow> FormatRows = new();
+    List<string> SourceFields = new();
+    string ApiKey = "", Status = "", FormatHint = "", Sens1 = "", Sens2 = "";
+
+    protected override void OnInitialized() => Reload();
+
+    void Reload()
+    {
+        SourceFields = ProductFormatExporter.GetAvailableSourceFields(Settings.Current.Mapping.DiscoveredColumns).ToList();
+        if (SourceFields.Count == 0) SourceFields = new List<string> { "Sku" };
+        Projects = Settings.Current.Destinations.ToList();
+        if (Selected is not null)
+            Selected = Projects.FirstOrDefault(p => p.Id == Selected.Id);
+        Selected ??= Projects.FirstOrDefault();
+        LoadSelected();
+    }
+
+    void Select(DestinationProject p)
+    {
+        Selected = p;
+        LoadSelected();
+    }
+
+    void LoadSelected()
+    {
+        FormatRows.Clear();
+        ApiKey = "";
+        if (Selected is null) { FormatHint = "Select a project."; return; }
+        foreach (var f in Selected.FormatFields)
+            FormatRows.Add(new FormatRow { SourceField = f.SourceField, DestinationKey = f.DestinationKey });
+        FormatHint = FormatRows.Count == 0
+            ? "Format empty — upload CSV/JSON. Only those keys sync."
+            : $"{FormatRows.Count} fields. Sync uses exactly these keys.";
+        Status = Credentials.HasSecret(CredentialKeys.DestinationApiKey(Selected.Id))
+            ? "API key on file (DPAPI)."
+            : "No API key saved yet.";
+    }
+
+    async Task<bool> EnsureOtp(string reason)
+    {
+        if (!Settings.Current.Security.OtpEnabled) return true;
+        if (string.IsNullOrWhiteSpace(Sens1) || string.IsNullOrWhiteSpace(Sens2))
+        {
+            Status = $"{reason}: Send OTP, enter both codes, retry.";
+            return false;
+        }
+        var (ok, message) = await Otp.VerifySensitiveOtpsAsync(Sens1, Sens2);
+        Status = message;
+        Sens1 = Sens2 = "";
+        return ok;
+    }
+
+    async Task SendOtp()
+    {
+        var (ok, message) = await Otp.SendSensitiveOtpsAsync("Admin destination change");
+        Status = message;
+    }
+
+    async Task AddProject()
+    {
+        if (!await EnsureOtp("Admin: create destination")) return;
+        var project = new DestinationProject
+        {
+            Name = $"Project {Projects.Count + 1}",
+            IntervalMinutes = 120,
+            FormatFields = new List<DestinationFormatField>()
+        };
+        Settings.Update(s => s.Destinations.Add(project));
+        await Settings.SaveAsync();
+        Reload();
+        Selected = Projects.FirstOrDefault(p => p.Id == project.Id);
+        LoadSelected();
+        Status = "Project created. Upload format → map → API → Save.";
+    }
+
+    async Task DeleteProject()
+    {
+        if (Selected is null) return;
+        if (!await EnsureOtp("Admin: delete destination")) return;
+        var id = Selected.Id;
+        Credentials.DeleteSecret(CredentialKeys.DestinationApiKey(id));
+        Settings.Update(s => s.Destinations.RemoveAll(p => p.Id == id));
+        await Settings.SaveAsync();
+        Selected = null;
+        Reload();
+        Status = "Project deleted.";
+    }
+
+    async Task OnFormatUpload(InputFileChangeEventArgs e)
+    {
+        if (Selected is null) { Status = "Select a project first."; return; }
+        if (!await EnsureOtp("Admin: upload format")) return;
+        await using var stream = e.File.OpenReadStream(2_000_000);
+        using var reader = new StreamReader(stream);
+        var raw = await reader.ReadToEndAsync();
+        var tmp = Path.Combine(Path.GetTempPath(), e.File.Name);
+        await File.WriteAllTextAsync(tmp, raw);
+        try
+        {
+            var (ok, message, fields, bodyHint) = FormatTemplateImporter.Import(tmp);
+            if (!ok) { Status = message; return; }
+            FormatRows = fields.Select(f => new FormatRow { SourceField = f.SourceField, DestinationKey = f.DestinationKey }).ToList();
+            Selected.BodyFormat = bodyHint;
+            Selected.FormatTemplateFileName = e.File.Name;
+            Selected.FormatTemplateRaw = raw.Length > 20000 ? raw[..20000] : raw;
+            FormatHint = $"{message} File: {e.File.Name}";
+            Status = message + " Verify mapping, then Save.";
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* ignore */ }
+        }
+    }
+
+    void AddField() => FormatRows.Add(new FormatRow());
+
+    async Task Save()
+    {
+        if (Selected is null) { Status = "Select a project first."; return; }
+        if (!await EnsureOtp("Admin: save destination")) return;
+        if (FormatRows.Count == 0 && !MultiTableSyncEnabled) { Status = "Format empty. Upload first, or enable Sync all tables on Data Mapping."; return; }
+        var id = Selected.Id;
+        Settings.Update(s =>
+        {
+            var p = s.Destinations.FirstOrDefault(x => x.Id == id);
+            if (p is null) return;
+            p.Name = Selected.Name.Trim();
+            p.Enabled = Selected.Enabled;
+            p.AutoSyncEnabled = Selected.AutoSyncEnabled;
+            p.IntervalMinutes = Math.Max(15, Selected.IntervalMinutes);
+            p.ApiUrl = Selected.ApiUrl.Trim();
+            p.HttpMethod = "POST";
+            p.BodyFormat = string.IsNullOrWhiteSpace(Selected.BodyFormat) ? "JsonArray" : Selected.BodyFormat;
+            p.AuthHeaderName = "Authorization";
+            p.AuthHeaderPrefix = "Bearer ";
+            p.FormatTemplateFileName = Selected.FormatTemplateFileName;
+            p.FormatTemplateRaw = Selected.FormatTemplateRaw;
+            p.FormatFields = FormatRows
+                .Where(r => !string.IsNullOrWhiteSpace(r.DestinationKey) && !string.IsNullOrWhiteSpace(r.SourceField))
+                .Select(r => new DestinationFormatField { SourceField = r.SourceField.Trim(), DestinationKey = r.DestinationKey.Trim() })
+                .ToList();
+        });
+        if (!string.IsNullOrWhiteSpace(ApiKey))
+            Credentials.SaveSecret(CredentialKeys.DestinationApiKey(id), ApiKey);
+        await Settings.SaveAsync();
+        Reload();
+        Selected = Projects.FirstOrDefault(p => p.Id == id);
+        LoadSelected();
+        Status = $"Saved. Sync sends only these {FormatRows.Count} format fields.";
+    }
+
+    bool MultiTableSyncEnabled =>
+        Settings.Current.Mapping.SyncAllTables || Settings.Current.Mapping.SelectedTables.Count > 0;
+
+    async Task RunSync(bool full)
+    {
+        if (Selected is null) return;
+        if (!MultiTableSyncEnabled && FormatRows.Count == 0)
+        {
+            Status = "Format missing. Upload a format, or Data Mapping → Load all tables → Save.";
+            return;
+        }
+        Status = MultiTableSyncEnabled
+            ? (full ? "Full sync all tables…" : "Syncing all tables…")
+            : (full ? "Full sync…" : "Syncing…");
+        var id = Selected.Id;
+        var (ok, message, sent, skipped) = await Sync.SyncProjectAsync(id, full);
+        Status = ok ? $"{message} (sent={sent}, skipped={skipped})" : $"Failed: {message}";
+        Reload();
+        Selected = Projects.FirstOrDefault(p => p.Id == id);
+        LoadSelected();
+    }
+}

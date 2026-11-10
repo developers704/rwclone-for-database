@@ -1,0 +1,16 @@
+# Ignore build outputs and secrets
+**/bin/
+**/obj/
+**/publish/
+**/distribute/
+**/.vs/
+*.user
+*.suo
+logs/
+*.dpapi
+**/sync-state.db
+
+# Extracted vendor binary (reference only; do not redistribute)
+RWLink_extracted/
+rwlink_*.txt
+agent-tools/

@@ -1,0 +1,49 @@
+@echo off
+:: Install Valliani Data Sync for the current Windows user (any PC)
+setlocal EnableExtensions
+cd /d "%~dp0"
+
+set APPDIR=%LOCALAPPDATA%\VallianiDataSync\App
+set DESKTOP=%USERPROFILE%\Desktop
+set STARTMENU=%APPDATA%\Microsoft\Windows\Start Menu\Programs
+
+if not exist "%~dp0VallianiDataSync.exe" (
+  echo ERROR: VallianiDataSync.exe not found in this folder.
+  echo Unzip the full package first, then run Install.bat from inside that folder.
+  pause
+  exit /b 1
+)
+
+echo Installing to:
+echo   %APPDIR%
+echo.
+
+mkdir "%APPDIR%" 2>nul
+echo Copying files...
+xcopy /E /I /Y /Q "%~dp0*" "%APPDIR%\" >nul
+if errorlevel 1 (
+  echo Copy failed.
+  pause
+  exit /b 1
+)
+
+:: Remove installer copy loop noise — keep exe
+echo Creating Desktop shortcut...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%DESKTOP%\Valliani Data Sync.lnk'); $s.TargetPath = '%APPDIR%\VallianiDataSync.exe'; $s.WorkingDirectory = '%APPDIR%'; $s.Description = 'Valliani Data Sync'; $s.Save()"
+
+mkdir "%STARTMENU%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%STARTMENU%\Valliani Data Sync.lnk'); $s.TargetPath = '%APPDIR%\VallianiDataSync.exe'; $s.WorkingDirectory = '%APPDIR%'; $s.Save()"
+
+echo.
+echo Installed.
+echo Desktop shortcut: Valliani Data Sync
+echo.
+echo Starting app...
+start "" "%APPDIR%\VallianiDataSync.exe"
+echo.
+echo If the login screen blocks you: click "Can't unlock? Recover access on this PC"
+echo then Unlock.
+pause
+endlocal

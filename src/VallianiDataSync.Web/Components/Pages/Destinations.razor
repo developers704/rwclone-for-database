@@ -1,0 +1,389 @@
+@page "/destinations"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISettingsService Settings
+@inject ICredentialStore Credentials
+@inject IDestinationSyncService Sync
+@inject IOtpAuthService Otp
+@inject IProductRepository Products
+<PageTitle>Destinations</PageTitle>
+
+<h1 class="page-title">Destinations</h1>
+<p class="page-sub">Each destination: pick sales / inventory / payments, fields, API URL. Auto sync pushes only when data changes.</p>
+
+<div class="split">
+    <div>
+        <div class="rail-title">PROJECTS</div>
+        <div class="rail-accent"></div>
+        @foreach (var p in Projects)
+        {
+            <button class="project-item @(Selected?.Id == p.Id ? "active" : null)" @onclick="() => Select(p)">
+                <div class="name">@(string.IsNullOrWhiteSpace(p.Name) ? "(unnamed)" : p.Name)</div>
+                <div class="meta">@(p.Enabled ? "Active" : "Paused")</div>
+            </button>
+        }
+        <div class="btn-row rail-actions">
+            <button class="btn btn-primary" @onclick="AddProject">+ New project</button>
+            <button class="btn btn-secondary" @onclick="DeleteProject">Remove</button>
+        </div>
+    </div>
+    <div class="v-divider"></div>
+    <div>
+        <h2 style="font-family:var(--display);font-size:22px;margin:0 0 4px">Project setup</h2>
+
+        <div class="otp-strip">
+            <div class="bar"></div>
+            <div>
+                <strong>Admin OTP</strong>
+                <div class="btn-row" style="margin-top:8px">
+                    <button class="btn btn-secondary" @onclick="SendOtp">Send OTP</button>
+                    <input type="text" style="max-width:120px;margin:0" @bind="Sens1" />
+                    <input type="text" style="max-width:120px;margin:0" @bind="Sens2" />
+                </div>
+            </div>
+        </div>
+
+        @if (Selected is null)
+        {
+            <p class="status">No project selected.</p>
+        }
+        else
+        {
+            <label class="field-label">Name</label>
+            <input type="text" class="input-narrow" @bind="Selected.Name" />
+            <div class="check-row">
+                <label><input type="checkbox" @bind="Selected.Enabled" /> Enabled</label>
+                <label><input type="checkbox" @bind="Selected.AutoSyncEnabled" /> Auto sync</label>
+            </div>
+            <label class="field-label">Auto interval (minutes)</label>
+            <input type="number" class="input-xs" @bind="Selected.IntervalMinutes" />
+            <label class="field-label">API URL</label>
+            <input type="text" class="input-wide" @bind="Selected.ApiUrl" />
+            <label class="field-label">API key / token</label>
+            <input type="password" class="input-wide" @bind="ApiKey" />
+
+            <hr class="section-rule" />
+            <h3 class="section-h">Fixed sources</h3>
+            <p class="status">@FormatHint</p>
+            <p class="status"><strong>@SelectionSummary</strong></p>
+
+            <div class="btn-row">
+                <button class="btn btn-secondary" @onclick="() => SetAllTables(true)">Select all sources</button>
+                <button class="btn btn-secondary" @onclick="() => SetAllTables(false)">Clear sources</button>
+                <button class="btn btn-primary" @onclick="LoadFields">Load fields</button>
+                <button class="btn btn-secondary" @onclick="() => SetAllFields(true)">Select all fields</button>
+                <button class="btn btn-secondary" @onclick="() => SetAllFields(false)">Clear fields</button>
+                <button class="btn btn-primary" @onclick="ExportCsv">Export CSV</button>
+            </div>
+
+            <table class="table table-map">
+                <thead><tr><th class="col-sync">Sync</th><th>Source</th><th>Description</th></tr></thead>
+                <tbody>
+                @foreach (var row in Tables)
+                {
+                    <tr>
+                        <td class="col-sync"><input type="checkbox" @bind="row.Selected" @bind:after="RefreshSummary" /></td>
+                        <td>@row.Name</td>
+                        <td>@row.Display</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+
+            <h4 class="section-h">Source fields</h4>
+            <p class="status">Empty field selection = all columns of selected sources.</p>
+            <table class="table table-map">
+                <thead><tr><th class="col-sync">Sync</th><th>Source</th><th>Field</th></tr></thead>
+                <tbody>
+                @foreach (var row in VisibleColumns)
+                {
+                    <tr>
+                        <td class="col-sync"><input type="checkbox" @bind="row.Selected" @bind:after="RefreshSummary" /></td>
+                        <td>@row.Table</td>
+                        <td>@row.Column</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+
+            <p class="status">@Selected.LastSyncMessage</p>
+            <div class="btn-row">
+                <button class="btn btn-primary" @onclick="Save">Save</button>
+                <button class="btn btn-secondary" @onclick="() => RunSync(false)">Sync Now</button>
+                <button class="btn btn-secondary" @onclick="() => RunSync(true)">Full Sync</button>
+            </div>
+        }
+        <p class="status">@Status</p>
+    </div>
+</div>
+
+@code {
+    sealed class TRow { public bool Selected { get; set; } public string Name { get; set; } = ""; public string Display { get; set; } = ""; }
+    sealed class CRow { public bool Selected { get; set; } public string Table { get; set; } = ""; public string Column { get; set; } = ""; }
+
+    List<DestinationProject> Projects = new();
+    DestinationProject? Selected;
+    List<TRow> Tables = new();
+    List<CRow> Columns = new();
+    string ApiKey = "", Status = "", FormatHint = "", Sens1 = "", Sens2 = "", SelectionSummary = "";
+
+    IEnumerable<CRow> VisibleColumns
+    {
+        get
+        {
+            var sel = new HashSet<string>(Tables.Where(t => t.Selected).Select(t => t.Name), StringComparer.OrdinalIgnoreCase);
+            return sel.Count == 0 ? Columns : Columns.Where(c => sel.Contains(c.Table));
+        }
+    }
+
+    protected override void OnInitialized() => Reload();
+
+    void Reload()
+    {
+        BuiltInSyncQueries.EnsureDefaults(Settings.Current.Mapping);
+        Projects = Settings.Current.Destinations.ToList();
+        if (Selected is not null)
+            Selected = Projects.FirstOrDefault(p => p.Id == Selected.Id);
+        Selected ??= Projects.FirstOrDefault();
+        LoadSelected();
+    }
+
+    void Select(DestinationProject p) { Selected = p; LoadSelected(); }
+
+    void LoadSelected()
+    {
+        ApiKey = "";
+        if (Selected is null) { FormatHint = "Select a project."; Tables.Clear(); Columns.Clear(); return; }
+
+        BuiltInSyncQueries.EnsureDefaults(Settings.Current.Mapping);
+        var saved = new HashSet<string>(Selected.SyncSources, StringComparer.OrdinalIgnoreCase);
+        var anyFixed = saved.Any(BuiltInSyncQueries.IsFixedSource);
+        Tables = BuiltInSyncQueries.AllKeys.Select(k => new TRow
+        {
+            Name = k,
+            Display = BuiltInSyncQueries.DisplayName(k),
+            Selected = !anyFixed || saved.Contains(k)
+        }).ToList();
+
+        var savedCols = new HashSet<string>(
+            Selected.FormatFields.Where(f => f.Enabled)
+                .Select(f => string.IsNullOrWhiteSpace(f.SourceField) ? f.DestinationKey : f.SourceField)
+                .Where(s => !string.IsNullOrWhiteSpace(s))!
+                .Select(s => s!.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+
+        Columns = Settings.Current.Mapping.TableColumns
+            .Where(kv => BuiltInSyncQueries.IsFixedSource(kv.Key))
+            .SelectMany(kv => kv.Value.Select(col => new CRow
+            {
+                Table = kv.Key,
+                Column = col,
+                Selected = savedCols.Count == 0 || savedCols.Contains($"{kv.Key}.{col}") || savedCols.Contains(col)
+            }))
+            .OrderBy(c => c.Table, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Column, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Status = Credentials.HasSecret(CredentialKeys.DestinationApiKey(Selected.Id)) ? "API key on file." : "No API key saved yet.";
+        FormatHint = "Only sales / inventory / payments. Tick sources → Load fields → tick fields → Save. Auto sync skips unchanged.";
+        RefreshSummary();
+    }
+
+    void RefreshSummary()
+    {
+        var t = Tables.Count(x => x.Selected);
+        var sel = new HashSet<string>(Tables.Where(x => x.Selected).Select(x => x.Name), StringComparer.OrdinalIgnoreCase);
+        var c = Columns.Count(x => x.Selected && (sel.Count == 0 || sel.Contains(x.Table)));
+        SelectionSummary = c == 0 ? $"{t} source(s) — all fields" : $"{t} source(s), {c} field(s)";
+    }
+
+    void SetAllTables(bool v)
+    {
+        foreach (var t in Tables) t.Selected = v;
+        RefreshSummary();
+    }
+
+    void SetAllFields(bool v)
+    {
+        var keys = new HashSet<string>(VisibleColumns.Select(c => $"{c.Table}.{c.Column}"), StringComparer.OrdinalIgnoreCase);
+        foreach (var c in Columns)
+            if (keys.Contains($"{c.Table}.{c.Column}"))
+                c.Selected = v;
+        RefreshSummary();
+    }
+
+    async Task LoadFields()
+    {
+        var selected = Tables.Where(t => t.Selected).Select(t => t.Name).ToList();
+        if (selected.Count == 0) { Status = "Tick at least one source."; return; }
+        try
+        {
+            BuiltInSyncQueries.EnsureDefaults(Settings.Current.Mapping);
+            Status = "Loading fields…";
+            var prev = new HashSet<string>(Columns.Where(c => c.Selected).Select(c => $"{c.Table}.{c.Column}"), StringComparer.OrdinalIgnoreCase);
+            var next = Columns.Where(c => !selected.Contains(c.Table, StringComparer.OrdinalIgnoreCase)).ToList();
+            var cache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var table in selected)
+            {
+                var cols = await Products.ListTableColumnsAsync(table);
+                cache[table] = cols.ToList();
+                foreach (var col in cols.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                {
+                    var full = $"{table}.{col}";
+                    next.Add(new CRow
+                    {
+                        Table = table,
+                        Column = col,
+                        Selected = prev.Count == 0 || prev.Contains(full) || prev.Contains(col)
+                    });
+                }
+            }
+            Columns = next;
+            Settings.Update(s =>
+            {
+                BuiltInSyncQueries.EnsureDefaults(s.Mapping);
+                foreach (var kv in cache) s.Mapping.TableColumns[kv.Key] = kv.Value;
+            });
+            await Settings.SaveAsync();
+            RefreshSummary();
+            Status = $"Loaded fields for {selected.Count} source(s).";
+        }
+        catch (Exception ex) { Status = $"Failed: {ex.Message}"; }
+    }
+
+    async Task ExportCsv()
+    {
+        var selected = Tables.Where(t => t.Selected).Select(t => t.Name).ToList();
+        if (selected.Count == 0) { Status = "Tick at least one source."; return; }
+        BuiltInSyncQueries.EnsureDefaults(Settings.Current.Mapping);
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "VallianiDataSync", "csv-export", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        Directory.CreateDirectory(root);
+        var batchSize = Math.Clamp(Settings.Current.Sync.BatchSize, 50, 500);
+        var ok = 0; var totalRows = 0;
+        foreach (var table in selected)
+        {
+            try
+            {
+                var rows = new List<Dictionary<string, object?>>();
+                var skip = 0;
+                while (true)
+                {
+                    var batch = await Products.ReadTableRowsAsync(table, batchSize, skip);
+                    if (batch.Count == 0) break;
+                    rows.AddRange(batch);
+                    skip += batch.Count;
+                    if (batch.Count < batchSize) break;
+                }
+                await File.WriteAllTextAsync(Path.Combine(root, table + ".csv"), ProductFormatExporter.ToCsvAllColumns(rows));
+                ok++; totalRows += rows.Count;
+            }
+            catch { /* continue */ }
+        }
+        Status = $"CSV export: {ok} file(s), {totalRows} rows. Folder: {root}";
+    }
+
+    async Task<bool> EnsureOtp(string reason)
+    {
+        if (!Settings.Current.Security.OtpEnabled) return true;
+        if (string.IsNullOrWhiteSpace(Sens1) || string.IsNullOrWhiteSpace(Sens2))
+        { Status = $"{reason}: Send OTP, enter both codes, retry."; return false; }
+        var (ok, message) = await Otp.VerifySensitiveOtpsAsync(Sens1, Sens2);
+        Status = message; Sens1 = Sens2 = "";
+        return ok;
+    }
+
+    async Task SendOtp()
+    {
+        var (ok, message) = await Otp.SendSensitiveOtpsAsync("Admin destination change");
+        Status = message;
+    }
+
+    async Task AddProject()
+    {
+        if (!await EnsureOtp("Admin: create destination")) return;
+        var project = new DestinationProject
+        {
+            Name = $"Project {Projects.Count + 1}",
+            IntervalMinutes = 120,
+            SyncSources = BuiltInSyncQueries.AllKeys.ToList(),
+            FormatFields = new List<DestinationFormatField>()
+        };
+        Settings.Update(s => { BuiltInSyncQueries.EnsureDefaults(s.Mapping); s.Destinations.Add(project); });
+        await Settings.SaveAsync();
+        Reload();
+        Selected = Projects.FirstOrDefault(p => p.Id == project.Id);
+        LoadSelected();
+        Status = "Project created.";
+    }
+
+    async Task DeleteProject()
+    {
+        if (Selected is null) return;
+        if (!await EnsureOtp("Admin: delete destination")) return;
+        var id = Selected.Id;
+        Credentials.DeleteSecret(CredentialKeys.DestinationApiKey(id));
+        Settings.Update(s => s.Destinations.RemoveAll(p => p.Id == id));
+        await Settings.SaveAsync();
+        Selected = null;
+        Reload();
+        Status = "Project deleted.";
+    }
+
+    async Task Save()
+    {
+        if (Selected is null) { Status = "Select a project first."; return; }
+        if (!await EnsureOtp("Admin: save destination")) return;
+        var selectedTables = Tables.Where(t => t.Selected).Select(t => t.Name)
+            .Where(BuiltInSyncQueries.IsFixedSource).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (selectedTables.Count == 0) { Status = "Select at least one source."; return; }
+
+        var selectedCols = Columns
+            .Where(c => c.Selected && selectedTables.Contains(c.Table, StringComparer.OrdinalIgnoreCase))
+            .Select(c => new DestinationFormatField
+            {
+                SourceField = $"{c.Table}.{c.Column}",
+                DestinationKey = c.Column,
+                Enabled = true
+            }).ToList();
+
+        var id = Selected.Id;
+        Settings.Update(s =>
+        {
+            BuiltInSyncQueries.EnsureDefaults(s.Mapping);
+            var p = s.Destinations.FirstOrDefault(x => x.Id == id);
+            if (p is null) return;
+            p.Name = Selected.Name.Trim();
+            p.Enabled = Selected.Enabled;
+            p.AutoSyncEnabled = Selected.AutoSyncEnabled;
+            p.IntervalMinutes = Math.Max(15, Selected.IntervalMinutes);
+            p.ApiUrl = Selected.ApiUrl.Trim();
+            p.HttpMethod = "POST";
+            p.BodyFormat = string.IsNullOrWhiteSpace(Selected.BodyFormat) ? "JsonArray" : Selected.BodyFormat;
+            p.AuthHeaderName = "Authorization";
+            p.AuthHeaderPrefix = "Bearer ";
+            p.SyncSources = selectedTables;
+            p.FormatFields = selectedCols;
+        });
+        if (!string.IsNullOrWhiteSpace(ApiKey))
+            Credentials.SaveSecret(CredentialKeys.DestinationApiKey(id), ApiKey);
+        await Settings.SaveAsync();
+        Reload();
+        Selected = Projects.FirstOrDefault(p => p.Id == id);
+        LoadSelected();
+        Status = $"Saved. {selectedTables.Count} source(s). Auto sync skips unchanged data.";
+    }
+
+    async Task RunSync(bool full)
+    {
+        if (Selected is null) return;
+        Status = full ? "Full sync…" : "Syncing (unchanged sources skipped)…";
+        var id = Selected.Id;
+        var (ok, message, sent, skipped) = await Sync.SyncProjectAsync(id, full);
+        var result = ok ? $"{message} (sent={sent}, skipped={skipped})" : $"Failed: {message}";
+        Reload();
+        Selected = Projects.FirstOrDefault(p => p.Id == id);
+        LoadSelected();
+        Status = result;
+    }
+}

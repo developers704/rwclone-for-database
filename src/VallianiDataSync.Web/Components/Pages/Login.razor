@@ -1,0 +1,54 @@
+@page "/login"
+@layout LoginLayout
+@attribute [AllowAnonymous]
+@inject ISettingsService Settings
+@inject NavigationManager Nav
+
+<PageTitle>Login — Valliani</PageTitle>
+
+<div class="login-page">
+    <div class="login-card">
+        <div class="brand">VALLIANI</div>
+        <h2>Secure workspace login</h2>
+        <p class="hint">@Hint</p>
+
+        @if (OtpEnabled)
+        {
+            <p class="hint">OTP is enabled — turn it off on Security, or use the link below.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary" href="/account/open-without-otp">Disable OTP &amp; Unlock</a>
+            </div>
+        }
+        else
+        {
+            <p class="hint">OTP is off — click Unlock to open the workspace.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary" href="/account/open-without-otp">Unlock</a>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(Status))
+        {
+            <p class="status">@Status</p>
+        }
+    </div>
+</div>
+
+@code {
+    string Status = "";
+    string Hint = "";
+    bool OtpEnabled;
+
+    protected override void OnInitialized()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (q.TryGetValue("error", out var err))
+            Status = err == "expired" ? "Login expired — Unlock again." : err.ToString();
+
+        var s = Settings.Current.Security;
+        OtpEnabled = s.OtpEnabled;
+        Hint = OtpEnabled
+            ? $"OTP enabled for {s.Email1} / {s.Email2}"
+            : "OTP is disabled — click Unlock without codes.";
+    }
+}

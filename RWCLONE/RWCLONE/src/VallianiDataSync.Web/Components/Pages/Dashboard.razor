@@ -1,0 +1,104 @@
+@page "/"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ILocalDatabaseService Db
+@inject IRemoteApiClient Api
+@inject IProductRepository Products
+@inject ISyncEngine Engine
+@inject ISyncStateStore State
+@inject ISettingsService Settings
+@inject IImageSyncService Images
+@inject IServiceProvider Services
+
+<PageTitle>Dashboard</PageTitle>
+
+<h1 class="page-title">Dashboard</h1>
+<p class="page-sub">Workspace health and recent sync activity.</p>
+
+<div class="btn-row">
+    <button class="btn btn-secondary" @onclick="Refresh" disabled="@Busy">Refresh</button>
+    <button class="btn btn-primary" @onclick="() => Run(false)" disabled="@Busy">Sync Now</button>
+    <button class="btn btn-secondary" @onclick="() => Run(true)" disabled="@Busy">Full Sync</button>
+</div>
+
+<div class="stat-grid">
+    <div class="stat"><div class="k">Database</div><div class="v">@DatabaseStatus</div></div>
+    <div class="stat"><div class="k">API</div><div class="v" style="font-size:14px">@ApiStatus</div></div>
+    <div class="stat"><div class="k">Products</div><div class="v">@TotalProducts</div></div>
+    <div class="stat"><div class="k">Last sync</div><div class="v" style="font-size:14px">@LastSync</div></div>
+    <div class="stat"><div class="k">Next scheduled</div><div class="v" style="font-size:14px">@NextSync</div></div>
+    <div class="stat"><div class="k">Pending images</div><div class="v">@PendingImages</div></div>
+</div>
+
+<p class="status">@Status</p>
+@if (Errors.Count > 0)
+{
+    <h3 style="margin-top:20px;font-size:15px">Recent errors</h3>
+    <ul>
+        @foreach (var e in Errors)
+        {
+            <li class="status">@e</li>
+        }
+    </ul>
+}
+
+@code {
+    string DatabaseStatus = "…", ApiStatus = "…", LastSync = "-", NextSync = "-", Status = "";
+    int TotalProducts, PendingImages;
+    bool Busy;
+    List<string> Errors = new();
+
+    protected override async Task OnInitializedAsync() => await Refresh();
+
+    async Task Refresh()
+    {
+        Busy = true;
+        try
+        {
+            var store = Settings.Current.Sync.SelectedStoreCode;
+            var last = await State.GetLastSuccessfulSyncAsync(store);
+            LastSync = last?.ToLocalTime().ToString("g") ?? "Never";
+
+            var scheduler = Services.GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+                .OfType<SyncSchedulerHostedService>().FirstOrDefault();
+            NextSync = scheduler?.NextScheduledSyncLocal?.ToString("g") ?? "Not scheduled";
+
+            try { DatabaseStatus = await Db.IsAvailableAsync() ? "Connected" : "Offline"; }
+            catch { DatabaseStatus = "Offline"; }
+
+            try
+            {
+                var (ok, msg) = await Api.ValidateAsync();
+                ApiStatus = ok ? "Connected" : msg;
+            }
+            catch (Exception ex) { ApiStatus = ex.Message; }
+
+            try { TotalProducts = await Products.CountProductsAsync(store); }
+            catch { TotalProducts = 0; }
+
+            var images = await Images.GetSummaryAsync(store);
+            PendingImages = images.Pending + images.Missing;
+
+            var logs = await State.QueryLogsAsync(null, null, LogLevelKind.Error, 8);
+            Errors = logs.Select(l => $"{l.TimestampUtc.ToLocalTime():g} — {l.Message}").ToList();
+            Status = "Ready";
+        }
+        finally { Busy = false; }
+    }
+
+    async Task Run(bool full)
+    {
+        Busy = true;
+        Status = full ? "Full sync…" : "Sync…";
+        try
+        {
+            var sync = Settings.Current.Sync;
+            var mode = full ? SyncMode.Full : sync.DefaultMode;
+            await Engine.RunAsync(mode, sync.Channels, sync.SelectedStoreCode);
+            Status = "Sync finished";
+            await Refresh();
+        }
+        catch (Exception ex) { Status = ex.Message; }
+        finally { Busy = false; }
+    }
+}

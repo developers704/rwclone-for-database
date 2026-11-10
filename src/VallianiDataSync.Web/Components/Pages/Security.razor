@@ -1,0 +1,159 @@
+@page "/security"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISettingsService Settings
+@inject ICredentialStore Credentials
+@inject IOtpAuthService Otp
+
+<PageTitle>Security / OTP</PageTitle>
+
+<h1 class="page-title">Security / OTP</h1>
+<p class="page-sub">Each OTP email uses its own SMTP (full email + that mailbox password).</p>
+
+<div class="otp-strip">
+    <div class="bar"></div>
+    <div>
+        <strong>Admin OTP</strong>
+        <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-secondary" @onclick="SendAdminOtp">Send OTP</button>
+            <input type="text" style="max-width:120px;margin:0" @bind="Sens1" placeholder="Email 1 OTP" />
+            <input type="text" style="max-width:120px;margin:0" @bind="Sens2" placeholder="Email 2 OTP" />
+        </div>
+    </div>
+</div>
+
+<div class="check-row">
+    <label><input type="checkbox" @bind="OtpEnabled" /> Enable dual-email OTP login</label>
+</div>
+
+<label class="field-label">Allowed IPs (one per line, empty = all)</label>
+<textarea @bind="AllowedIps"></textarea>
+
+<h3 style="font-size:16px;margin:18px 0 8px">Email 1 SMTP</h3>
+<label class="field-label">Email 1 address</label>
+<input type="text" @bind="Email1" />
+<label class="field-label">SMTP Host</label>
+<input type="text" @bind="Smtp1Host" />
+<label class="field-label">SMTP Port</label>
+<input type="number" @bind="Smtp1Port" />
+<label class="field-label">SMTP Username (full email)</label>
+<input type="text" @bind="Smtp1User" />
+<label class="field-label">SMTP Password (Email 1 password)</label>
+<input type="password" @bind="Smtp1Pass" />
+
+<h3 style="font-size:16px;margin:18px 0 8px">Email 2 SMTP</h3>
+<label class="field-label">Email 2 address</label>
+<input type="text" @bind="Email2" />
+<label class="field-label">SMTP Host</label>
+<input type="text" @bind="Smtp2Host" />
+<label class="field-label">SMTP Port</label>
+<input type="number" @bind="Smtp2Port" />
+<label class="field-label">SMTP Username (full email)</label>
+<input type="text" @bind="Smtp2User" />
+<label class="field-label">SMTP Password (Email 2 password)</label>
+<input type="password" @bind="Smtp2Pass" />
+
+<div class="btn-row">
+    <button class="btn btn-primary" @onclick="Save">Save</button>
+    <button class="btn btn-secondary" @onclick="TestOtp">Send test OTP</button>
+</div>
+<p class="status">@Status</p>
+
+@code {
+    bool OtpEnabled;
+    string Email1 = "", Email2 = "", AllowedIps = "", Status = "";
+    string Smtp1Host = "", Smtp1User = "", Smtp1Pass = "";
+    string Smtp2Host = "", Smtp2User = "", Smtp2Pass = "";
+    string Sens1 = "", Sens2 = "";
+    int Smtp1Port = 587, Smtp2Port = 587;
+
+    protected override void OnInitialized() => Load();
+
+    void Load()
+    {
+        var s = Settings.Current.Security;
+        s.MigrateLegacySmtpIfNeeded();
+        OtpEnabled = s.OtpEnabled;
+        Email1 = s.Email1; Email2 = s.Email2;
+        AllowedIps = string.Join(Environment.NewLine, s.AllowedIps);
+        Smtp1Host = s.Smtp1.Host; Smtp1Port = s.Smtp1.Port <= 0 ? 587 : s.Smtp1.Port;
+        Smtp1User = string.IsNullOrWhiteSpace(s.Smtp1.Username) ? s.Email1 : s.Smtp1.Username;
+        Smtp2Host = s.Smtp2.Host; Smtp2Port = s.Smtp2.Port <= 0 ? 587 : s.Smtp2.Port;
+        Smtp2User = string.IsNullOrWhiteSpace(s.Smtp2.Username) ? s.Email2 : s.Smtp2.Username;
+        var p1 = Credentials.HasSecret(CredentialKeys.SmtpPassword1) || Credentials.HasSecret(CredentialKeys.SmtpPassword);
+        var p2 = Credentials.HasSecret(CredentialKeys.SmtpPassword2);
+        Status = (p1 || p2)
+            ? $"Email passwords on file — Email1: {(p1 ? "yes" : "no")}, Email2: {(p2 ? "yes" : "no")}."
+            : "No SMTP passwords saved yet.";
+    }
+
+    async Task SendAdminOtp()
+    {
+        var (ok, message) = await Otp.SendSensitiveOtpsAsync("Admin security change");
+        Status = ok ? message : "Failed: " + message;
+    }
+
+    async Task TestOtp()
+    {
+        var (ok, message) = await Otp.SendLoginOtpsAsync();
+        Status = ok ? message : "Failed: " + message;
+    }
+
+    async Task Save()
+    {
+        var existing = Settings.Current.Security;
+        var emailsChanging =
+            !string.Equals(existing.Email1?.Trim(), Email1.Trim(), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(existing.Email2?.Trim(), Email2.Trim(), StringComparison.OrdinalIgnoreCase)
+            || existing.OtpEnabled != OtpEnabled;
+
+        var locked = existing.OtpEnabled && !string.IsNullOrWhiteSpace(existing.Email1) && !string.IsNullOrWhiteSpace(existing.Email2);
+        if (locked && emailsChanging)
+        {
+            if (string.IsNullOrWhiteSpace(Sens1) || string.IsNullOrWhiteSpace(Sens2))
+            {
+                Status = "Changing emails / OTP switch needs admin OTP. SMTP password-only Save is allowed without OTP.";
+                return;
+            }
+            var (ok, message) = await Otp.VerifySensitiveOtpsAsync(Sens1, Sens2);
+            Sens1 = Sens2 = "";
+            if (!ok) { Status = message; return; }
+        }
+
+        var u1 = string.IsNullOrWhiteSpace(Smtp1User) ? Email1.Trim() : Smtp1User.Trim();
+        var u2 = string.IsNullOrWhiteSpace(Smtp2User) ? Email2.Trim() : Smtp2User.Trim();
+
+        Settings.Update(s =>
+        {
+            s.Security.OtpEnabled = OtpEnabled;
+            s.Security.Email1 = Email1.Trim();
+            s.Security.Email2 = Email2.Trim();
+            s.Security.AllowedIps = AllowedIps
+                .Split(new[] { '\r', '\n', ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+            s.Security.Smtp1.Host = Smtp1Host.Trim();
+            s.Security.Smtp1.Port = Smtp1Port <= 0 ? 587 : Smtp1Port;
+            s.Security.Smtp1.Username = u1;
+            s.Security.Smtp1.From = Email1.Trim();
+            s.Security.Smtp1.UseSsl = true;
+            s.Security.Smtp2.Host = Smtp2Host.Trim();
+            s.Security.Smtp2.Port = Smtp2Port <= 0 ? 587 : Smtp2Port;
+            s.Security.Smtp2.Username = u2;
+            s.Security.Smtp2.From = Email2.Trim();
+            s.Security.Smtp2.UseSsl = true;
+        });
+
+        if (!string.IsNullOrWhiteSpace(Smtp1Pass))
+        {
+            Credentials.SaveSecret(CredentialKeys.SmtpPassword1, Smtp1Pass);
+            Credentials.SaveSecret(CredentialKeys.SmtpPassword, Smtp1Pass);
+        }
+        if (!string.IsNullOrWhiteSpace(Smtp2Pass))
+            Credentials.SaveSecret(CredentialKeys.SmtpPassword2, Smtp2Pass);
+
+        await Settings.SaveAsync();
+        Smtp1Pass = Smtp2Pass = "";
+        Load();
+        Status = "Saved. Email1 SMTP uses Email1 password; Email2 SMTP uses Email2 password.";
+    }
+}

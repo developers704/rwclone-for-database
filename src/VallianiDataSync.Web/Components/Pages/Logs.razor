@@ -1,0 +1,53 @@
+@page "/logs"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISyncStateStore State
+
+<PageTitle>Logs</PageTitle>
+
+<h1 class="page-title">Logs</h1>
+<p class="page-sub">Recent sync log entries from local state.</p>
+
+<label class="field-label">Search</label>
+<input type="text" @bind="Search" />
+<label class="field-label">Store filter</label>
+<input type="text" @bind="StoreFilter" />
+
+<div class="btn-row">
+    <button class="btn btn-primary" @onclick="Load">Search</button>
+</div>
+<p class="status">@Status</p>
+
+<table class="table">
+    <thead>
+        <tr><th>Time</th><th>Level</th><th>Store</th><th>Message</th></tr>
+    </thead>
+    <tbody>
+    @foreach (var e in Entries)
+    {
+        <tr>
+            <td>@e.TimestampUtc.ToLocalTime().ToString("g")</td>
+            <td>@e.Level</td>
+            <td>@e.StoreCode</td>
+            <td>@e.Message</td>
+        </tr>
+    }
+    </tbody>
+</table>
+
+@code {
+    string Search = "", StoreFilter = "", Status = "";
+    List<SyncLogEntry> Entries = new();
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    async Task Load()
+    {
+        Entries = (await State.QueryLogsAsync(
+            string.IsNullOrWhiteSpace(Search) ? null : Search,
+            string.IsNullOrWhiteSpace(StoreFilter) ? null : StoreFilter,
+            null,
+            500)).ToList();
+        Status = $"{Entries.Count} entries.";
+    }
+}

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SQL Connection Test</title>
+  <style>
+    :root {
+      --bg: #e8eef2;
+      --ink: #14242f;
+      --muted: #5b6c79;
+      --accent: #0c5a4c;
+      --line: #c8d4de;
+      --ok: #0c5a4c;
+      --bad: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg); color: var(--ink);
+      display: grid; place-items: center; padding: 24px;
+    }
+    main {
+      width: min(440px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 28px 24px;
+    }
+    h1 { margin: 0 0 6px; font-size: 22px; }
+    p.sub { margin: 0 0 20px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+    input[type=text], input[type=password], input[type=number] {
+      width: 100%; height: 40px; margin-bottom: 12px;
+      padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px;
+    }
+    .row { display: flex; gap: 12px; align-items: center; margin: 4px 0 14px; font-size: 14px; }
+    button {
+      width: 100%; height: 42px; border: 0; border-radius: 10px;
+      background: var(--accent); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    #out {
+      margin-top: 16px; padding: 12px; border-radius: 10px;
+      font-size: 13px; line-height: 1.5; white-space: pre-wrap; display: none;
+    }
+    #out.ok { display: block; background: #d8eee7; color: var(--ok); }
+    #out.bad { display: block; background: #fdecea; color: var(--bad); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>SQL Connection Test</h1>
+    <p class="sub">One-page tester. Browser talks to local helper on port 5055, which opens SQL Server for you.</p>
+
+    <label>Host / IP</label>
+    <input id="host" type="text" value="192.1.11.200" />
+
+    <label>Port</label>
+    <input id="port" type="number" value="1433" />
+
+    <label>Database name</label>
+    <input id="database" type="text" value="iTransactDB" />
+
+    <label>Username</label>
+    <input id="username" type="text" value="sa" />
+
+    <label>Password</label>
+    <input id="password" type="password" />
+
+    <div class="row">
+      <input id="windowsAuth" type="checkbox" />
+      <label for="windowsAuth" style="margin:0">Windows Authentication</label>
+    </div>
+
+    <label>Timeout (seconds)</label>
+    <input id="timeout" type="number" value="15" />
+
+    <button id="btn" type="button">Test connection</button>
+    <div id="out"></div>
+  </main>
+
+  <script>
+    const out = document.getElementById("out");
+    const btn = document.getElementById("btn");
+
+    btn.addEventListener("click", async () => {
+      out.className = "";
+      out.style.display = "none";
+      btn.disabled = true;
+      btn.textContent = "Testing…";
+
+      const body = {
+        host: document.getElementById("host").value.trim(),
+        port: Number(document.getElementById("port").value) || 1433,
+        database: document.getElementById("database").value.trim(),
+        username: document.getElementById("username").value.trim(),
+        password: document.getElementById("password").value,
+        windowsAuth: document.getElementById("windowsAuth").checked,
+        timeoutSeconds: Number(document.getElementById("timeout").value) || 15
+      };
+
+      try {
+        const res = await fetch("/api/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        out.textContent = data.message + (data.version ? "\n\n" + data.version : "");
+        out.className = data.ok ? "ok" : "bad";
+      } catch (err) {
+        out.textContent = "Could not reach test helper. Run: dotnet run\n\n" + err.message;
+        out.className = "bad";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Test connection";
+      }
+    });
+  </script>
+</body>
+</html>

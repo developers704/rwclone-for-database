@@ -1,0 +1,139 @@
+@page "/database"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject ISettingsService Settings
+@inject ICredentialStore Credentials
+@inject ILocalDatabaseService Db
+
+<PageTitle>Database</PageTitle>
+
+<h1 class="page-title">Database</h1>
+<p class="page-sub">Connect to your product source. Saved once — stays until you change it.</p>
+
+<label class="field-label">Provider</label>
+<select @bind="Provider" @bind:after="OnProviderChanged">
+    <option>MySQL</option>
+    <option>SQL Server</option>
+</select>
+
+<label class="field-label">Host</label>
+<input type="text" @bind="Host" />
+<label class="field-label">Port</label>
+<input type="number" @bind="Port" />
+<label class="field-label">Database name</label>
+<input type="text" @bind="DatabaseName" />
+<label class="field-label">Username</label>
+<input type="text" @bind="Username" />
+<label class="field-label">Password</label>
+<input type="password" @bind="Password" autocomplete="new-password" />
+
+@if (Provider == "SQL Server")
+{
+    <div class="check-row">
+        <label><input type="checkbox" @bind="UseWindowsAuth" /> Windows Authentication</label>
+    </div>
+    @if (UseWindowsAuth)
+    {
+        <p class="status" style="color:var(--danger)">Windows Auth ON — username/password are ignored. Uncheck for SQL login.</p>
+    }
+}
+
+<label class="field-label">Timeout (seconds)</label>
+<input type="number" @bind="Timeout" />
+
+<div class="btn-row">
+    <button class="btn btn-secondary" @onclick="Test" disabled="@Busy">Test connection</button>
+    <button class="btn btn-primary" @onclick="Save" disabled="@Busy">Save</button>
+</div>
+<p class="status">@Status</p>
+
+@code {
+    string Provider = "SQL Server", Host = "", DatabaseName = "", Username = "", Password = "", Status = "";
+    int Port = 1433, Timeout = 30;
+    bool UseWindowsAuth;
+    bool Busy;
+
+    protected override void OnInitialized()
+    {
+        var db = Settings.Current.Database;
+        Provider = db.Provider == DatabaseProviderKind.MySql ? "MySQL" : "SQL Server";
+        Host = db.Host ?? "";
+        Port = db.Port > 0 ? db.Port : (Provider == "MySQL" ? 3306 : 1433);
+        DatabaseName = db.Database ?? "";
+        Username = db.Username ?? "";
+        UseWindowsAuth = db.UseWindowsAuthentication;
+        Timeout = db.ConnectionTimeoutSeconds > 0 ? db.ConnectionTimeoutSeconds : 30;
+        if (DatabaseName.Equals("iTransectDB", StringComparison.OrdinalIgnoreCase))
+            DatabaseName = "iTransactDB";
+        Status = Credentials.HasSecret(CredentialKeys.SqlPassword)
+            ? "Password on file (DPAPI)."
+            : "No password stored.";
+    }
+
+    void OnProviderChanged()
+    {
+        if (Provider == "SQL Server" && Port == 3306) Port = 1433;
+        if (Provider == "MySQL" && Port == 1433) Port = 3306;
+        if (Provider != "SQL Server") UseWindowsAuth = false;
+    }
+
+    void Persist()
+    {
+        if (DatabaseName.Equals("iTransectDB", StringComparison.OrdinalIgnoreCase))
+            DatabaseName = "iTransactDB";
+
+        Settings.Update(s =>
+        {
+            s.Database.Provider = Provider == "MySQL" ? DatabaseProviderKind.MySql : DatabaseProviderKind.SqlServer;
+            s.Database.Host = Host.Trim();
+            s.Database.Port = Port;
+            s.Database.Database = DatabaseName.Trim();
+            s.Database.Username = Username.Trim();
+            s.Database.UseWindowsAuthentication = Provider == "SQL Server" && UseWindowsAuth;
+            s.Database.ConnectionTimeoutSeconds = Math.Clamp(Timeout, 5, 120);
+        });
+        if (!(Provider == "SQL Server" && UseWindowsAuth) && !string.IsNullOrEmpty(Password))
+            Credentials.SaveSecret(CredentialKeys.SqlPassword, Password);
+    }
+
+    async Task Test()
+    {
+        Busy = true;
+        try
+        {
+            Persist();
+            Status = Provider == "SQL Server" && UseWindowsAuth
+                ? "Testing with Windows Authentication…"
+                : "Testing…";
+            var (ok, message) = await Db.TestConnectionAsync();
+            if (ok)
+            {
+                Status = message + (UseWindowsAuth ? " [Windows Auth]" : "");
+                return;
+            }
+            Status = "Failed: " + message;
+            if (message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("not accessible", StringComparison.OrdinalIgnoreCase))
+            {
+                Status += "\n\nTip: local SQL → Host=localhost or .\\SQLEXPRESS, Port=0, Windows Auth ON.";
+            }
+        }
+        finally { Busy = false; }
+    }
+
+    async Task Save()
+    {
+        Busy = true;
+        try
+        {
+            Persist();
+            await Settings.SaveAsync();
+            Status = UseWindowsAuth
+                ? "Saved — Windows Auth ON (username/password ignored)."
+                : "Database settings saved.";
+            Password = "";
+        }
+        finally { Busy = false; }
+    }
+}

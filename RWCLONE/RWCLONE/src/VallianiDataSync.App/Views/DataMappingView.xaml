@@ -1,0 +1,49 @@
+<UserControl x:Class="VallianiDataSync.App.Views.DataMappingView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer>
+    <StackPanel>
+      <TextBlock Text="Data Mapping" Style="{StaticResource SectionTitle}"/>
+      <TextBlock Text="Tick Sync ALL database tables → Save. Sync Now auto-discovers every table (2600+ OK)."
+                 Style="{StaticResource SectionSubtitle}"/>
+
+      <CheckBox Content="Sync ALL database tables (discover at sync time — do not need to select each name)"
+                IsChecked="{Binding SyncAllTables}" Margin="0,0,0,12"/>
+
+      <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+        <Button Content="Load all tables" Style="{StaticResource PrimaryButton}" Command="{Binding LoadAllTablesCommand}" Margin="0,0,8,0"/>
+        <Button Content="Select all" Style="{StaticResource SecondaryButton}" Command="{Binding SelectAllTablesCommand}" Margin="0,0,8,0"/>
+        <Button Content="Clear all" Style="{StaticResource SecondaryButton}" Command="{Binding ClearAllTablesCommand}"/>
+      </StackPanel>
+
+      <TextBlock Text="Tables to sync" FontWeight="SemiBold" Margin="0,4,0,6"/>
+      <ListBox ItemsSource="{Binding Tables}" Height="180" BorderBrush="{StaticResource LineBrush}">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <CheckBox Content="{Binding TableName}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Margin="4,2"/>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <TextBlock Text="Products table (for product field mapping)" Style="{StaticResource FieldLabel}" Margin="0,16,0,0"/>
+      <TextBox Text="{Binding ProductsTable, UpdateSourceTrigger=PropertyChanged}"/>
+      <TextBlock Text="Modified-at column (optional)" Style="{StaticResource FieldLabel}"/>
+      <TextBox Text="{Binding ModifiedAtColumn, UpdateSourceTrigger=PropertyChanged}"/>
+      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+        <Button Content="Load columns A→Z" Style="{StaticResource SecondaryButton}" Command="{Binding LoadAllColumnsCommand}" Margin="0,0,8,0"/>
+        <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"/>
+      </StackPanel>
+      <TextBlock Text="{Binding StatusMessage}" Margin="0,10,0,12" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+
+      <TextBlock Text="Discovered columns" FontWeight="SemiBold" Margin="0,0,0,4"/>
+      <ListBox ItemsSource="{Binding DiscoveredColumns}" Height="90" BorderBrush="{StaticResource LineBrush}" Margin="0,0,0,12"/>
+
+      <DataGrid ItemsSource="{Binding Rows}" AutoGenerateColumns="False" CanUserAddRows="False" Height="280">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="Logical field" Binding="{Binding LogicalField}" IsReadOnly="True" Width="*"/>
+          <DataGridTextColumn Header="Local column" Binding="{Binding ColumnName, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+        </DataGrid.Columns>
+      </DataGrid>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

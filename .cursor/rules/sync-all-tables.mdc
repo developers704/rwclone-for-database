@@ -1,0 +1,15 @@
+---
+description: User wants ALL database tables synced (not only products)
+alwaysApply: true
+---
+
+# Sync all tables
+
+User requirement (remember always):
+
+- Sync **all tables** from the source database, not only a single `products` table.
+- Source for RWLink-style shop: **SQL Server** on host `CHAINARY` / IP, database **`iTransactDB`**, user **`sa`** (SQL auth, Windows Auth OFF).
+- Current app is still mostly **one products table + field mapping** — when building sync/mapping/destinations features, prefer designs that support **multi-table** (list tables, select which to sync, per-table mapping or format).
+- Do not assume MySQL `Vendor_portal` is the only source unless the user switches to it.
+
+When the user asks to implement full multi-table sync, extend mapping + sync engine + destinations accordingly.

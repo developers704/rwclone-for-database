@@ -1,0 +1,22 @@
+﻿@inherits LayoutComponentBase
+
+<div class="shell">
+    <aside class="sidebar">
+        <div class="brand">VALLIANI</div>
+        <div class="brand-sub">Data Sync</div>
+        <nav>
+            <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
+            <NavLink href="/database">Database</NavLink>
+            <NavLink href="/mapping">Data Mapping</NavLink>
+            <NavLink href="/sync">Sync Settings</NavLink>
+            <div class="nav-chip">ADMIN</div>
+            <NavLink href="/destinations">Destinations</NavLink>
+            <NavLink href="/security">Security / OTP</NavLink>
+            <NavLink href="/logs">Logs</NavLink>
+        </nav>
+        <a class="lock" href="/account/logout">Lock workspace</a>
+    </aside>
+    <main class="content">
+        @Body
+    </main>
+</div>

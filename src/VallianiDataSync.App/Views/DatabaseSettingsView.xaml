@@ -1,0 +1,35 @@
+<UserControl x:Class="VallianiDataSync.App.Views.DatabaseSettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer>
+    <Border Style="{StaticResource SoftPanel}" MaxWidth="580" HorizontalAlignment="Left">
+      <StackPanel>
+        <TextBlock Text="Database" Style="{StaticResource SectionTitle}"/>
+        <TextBlock Text="Local test: SQL Server + Windows Auth ON, Host=localhost, Port=0, no user/pass. Live: CHAINARY + sa password."
+                   Style="{StaticResource SectionSubtitle}"/>
+        <TextBlock Text="Database type" Style="{StaticResource FieldLabel}"/>
+        <ComboBox ItemsSource="{Binding ProviderChoices}" SelectedItem="{Binding SelectedProvider}"/>
+        <TextBlock Text="Hostname / IP (localhost or .\\SQLEXPRESS or CHAINARY)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}"/>
+        <TextBlock Text="Port (0 = default/local instance, 1433 = TCP)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}"/>
+        <TextBlock Text="Database name (e.g. iTransactDB)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Database, UpdateSourceTrigger=PropertyChanged}"/>
+        <TextBlock Text="Username (leave empty if Windows Auth)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
+        <TextBlock Text="Password (leave empty if Windows Auth)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding Password, UpdateSourceTrigger=PropertyChanged}"/>
+        <CheckBox Content="Windows Authentication (local SQL — no username/password)"
+                  IsChecked="{Binding UseWindowsAuthentication}"
+                  IsEnabled="{Binding IsSqlServer}" Margin="0,8,0,4"/>
+        <TextBlock Text="Connection timeout (seconds)" Style="{StaticResource FieldLabel}"/>
+        <TextBox Text="{Binding ConnectionTimeout, UpdateSourceTrigger=PropertyChanged}"/>
+        <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+          <Button Content="Test Connection" Style="{StaticResource SecondaryButton}" Command="{Binding TestConnectionCommand}" Margin="0,0,10,0"/>
+          <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"/>
+        </StackPanel>
+        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+      </StackPanel>
+    </Border>
+  </ScrollViewer>
+</UserControl>
