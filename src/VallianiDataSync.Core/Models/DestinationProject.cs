@@ -86,20 +86,30 @@ public sealed class DestinationProject : INotifyPropertyChanged
         set => SetField(ref _nextSyncLocal, value);
     }
 
-    /// <summary>Resolved inclusive from/to for caratone-sale. Returns false if From missing.</summary>
+    /// <summary>
+    /// Inclusive from/to for caratone-sale / caratone-payment.
+    /// Missing From defaults to PC today (daily sync).
+    /// </summary>
     public bool TryGetSaleReportDates(out DateTime fromInclusive, out DateTime toInclusive)
     {
-        fromInclusive = default;
-        toInclusive = default;
-        if (SaleReportDateFrom is null)
-            return false;
-        fromInclusive = SaleReportDateFrom.Value.Date;
+        fromInclusive = (SaleReportDateFrom ?? DateTime.Today).Date;
         toInclusive = SaleDateIsRange && SaleReportDateTo is not null
             ? SaleReportDateTo.Value.Date
             : fromInclusive;
         if (toInclusive < fromInclusive)
             (fromInclusive, toInclusive) = (toInclusive, fromInclusive);
         return true;
+    }
+
+    /// <summary>Pin caratone dates to PC today when unset (daily default).</summary>
+    public void EnsureCaratoneDatesDefaultToday()
+    {
+        if (SaleReportDateFrom is null)
+            SaleReportDateFrom = DateTime.Today;
+        if (!SaleDateIsRange)
+            SaleReportDateTo = SaleReportDateFrom;
+        else if (SaleReportDateTo is null)
+            SaleReportDateTo = SaleReportDateFrom;
     }
 
     private void SetField<T>(ref T field, T value, [CallerMemberName] string? name = null)

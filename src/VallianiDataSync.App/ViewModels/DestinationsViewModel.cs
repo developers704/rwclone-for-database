@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Data;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
@@ -17,35 +18,35 @@ public partial class DestTableRow : ObservableObject
     [ObservableProperty] private string _displayName = string.Empty;
 }
 
-public partial class DestColumnRow : ObservableObject
-{
-    [ObservableProperty] private bool _isSelected;
-    [ObservableProperty] private string _tableName = string.Empty;
-    [ObservableProperty] private string _columnName = string.Empty;
-}
-
 public partial class DestinationsViewModel : ObservableObject
 {
+    private const string ApiKeySavedMask = "••••••••••••";
+    private const int PreviewRowLimit = 200;
+
     private readonly ISettingsService _settings;
     private readonly ICredentialStore _credentials;
     private readonly IDestinationSyncService _sync;
     private readonly IOtpAuthService _otp;
     private readonly IProductRepository _products;
 
-    private List<DestColumnRow> _allColumns = new();
+    private bool _suppressSourceChanged;
 
     public ObservableCollection<DestinationProject> Projects { get; } = new();
-    public ObservableCollection<DestTableRow> Tables { get; } = new();
-    public ObservableCollection<DestColumnRow> Columns { get; } = new();
-    public IReadOnlyList<string> BodyFormats { get; } = new[] { "JsonArray", "Csv" };
+    public ObservableCollection<DestTableRow> SourceOptions { get; } = new();
 
     [ObservableProperty] private DestinationProject? _selectedProject;
+    [ObservableProperty] private DestTableRow? _selectedSource;
+    [ObservableProperty] private bool _showCaratoneDates;
+    [ObservableProperty] private DataView? _previewView;
     [ObservableProperty] private string _apiKey = string.Empty;
     [ObservableProperty] private string _statusMessage = string.Empty;
     [ObservableProperty] private string _sensitiveOtp1 = string.Empty;
     [ObservableProperty] private string _sensitiveOtp2 = string.Empty;
-    [ObservableProperty] private string _formatFileHint = "";
     [ObservableProperty] private string _selectionSummary = "";
+    [ObservableProperty] private bool _isBusy;
+    [ObservableProperty] private bool _isIdle = true;
+
+    partial void OnIsBusyChanged(bool value) => IsIdle = !value;
 
     public DestinationsViewModel(
         ISettingsService settings,
@@ -59,6 +60,7 @@ public partial class DestinationsViewModel : ObservableObject
         _sync = sync;
         _otp = otp;
         _products = products;
+        RebuildSourceOptions();
         Load();
     }
 
@@ -76,252 +78,222 @@ public partial class DestinationsViewModel : ObservableObject
 
     partial void OnSelectedProjectChanged(DestinationProject? value) => LoadSelected();
 
-    private const string ApiKeySavedMask = "••••••••••••";
+    partial void OnSelectedSourceChanged(DestTableRow? value)
+    {
+        if (_suppressSourceChanged) return;
+        ApplySourceSelection(value);
+        _ = LoadPreviewAsync();
+    }
+
+    private void RebuildSourceOptions()
+    {
+        SourceOptions.Clear();
+        foreach (var key in BuiltInSyncQueries.AllKeys)
+        {
+            SourceOptions.Add(new DestTableRow
+            {
+                TableName = key,
+                DisplayName = $"{key} — {BuiltInSyncQueries.DisplayName(key)}"
+            });
+        }
+    }
 
     private void LoadSelected()
     {
+        PreviewView = null;
         if (SelectedProject is null)
         {
             ApiKey = string.Empty;
-            FormatFileHint = "Select a project.";
-            Tables.Clear();
-            Columns.Clear();
             SelectionSummary = "";
+            ShowCaratoneDates = false;
+            _suppressSourceChanged = true;
+            SelectedSource = null;
+            _suppressSourceChanged = false;
             return;
         }
 
-        // Show mask when key is already stored (field used to look "wiped" after Save)
         ApiKey = _credentials.HasSecret(CredentialKeys.DestinationApiKey(SelectedProject.Id))
             ? ApiKeySavedMask
             : string.Empty;
 
         BuiltInSyncQueries.EnsureDefaults(_settings.Current.Mapping);
-        var saved = new HashSet<string>(
-            (SelectedProject.SyncSources ?? new List<string>()).Where(s => !string.IsNullOrWhiteSpace(s)),
-            StringComparer.OrdinalIgnoreCase);
-        // Default: sales/inventory/payments; marketplace-inv-test only if previously saved
-        var anyFixed = saved.Any(BuiltInSyncQueries.IsFixedSource);
-        Tables.Clear();
-        foreach (var key in BuiltInSyncQueries.AllKeys)
-        {
-            Tables.Add(new DestTableRow
-            {
-                TableName = key,
-                DisplayName = BuiltInSyncQueries.DisplayName(key),
-                IsSelected = anyFixed
-                    ? saved.Contains(key)
-                    : BuiltInSyncQueries.DefaultKeys.Contains(key, StringComparer.OrdinalIgnoreCase)
-            });
-        }
+        var saved = (SelectedProject.SyncSources ?? new List<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s) && BuiltInSyncQueries.IsFixedSource(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        RebuildColumnsFromSaved();
-        RefreshSummary();
-        FormatFileHint =
-            "Inventory / products / caratone-sale / caratone-payment (set dates below). " +
-            "Marketplace CSV field = csvFile. Token: paste → Save (••••).";
+        // Single source only — take first saved, else first default, else first option
+        var pick = saved.FirstOrDefault()
+                   ?? BuiltInSyncQueries.DefaultKeys.FirstOrDefault()
+                   ?? BuiltInSyncQueries.AllKeys.FirstOrDefault();
 
+        _suppressSourceChanged = true;
+        SelectedSource = SourceOptions.FirstOrDefault(s =>
+                               s.TableName.Equals(pick, StringComparison.OrdinalIgnoreCase))
+                           ?? SourceOptions.FirstOrDefault();
+        _suppressSourceChanged = false;
+
+        ApplySourceSelection(SelectedSource);
         StatusMessage = _credentials.HasSecret(CredentialKeys.DestinationApiKey(SelectedProject.Id))
             ? "API token saved (••••). Leave as •••• or paste a new token to replace."
             : "No API token yet — paste token then Save.";
+        _ = LoadPreviewAsync();
     }
 
-    private void RebuildColumnsFromSaved()
+    private void ApplySourceSelection(DestTableRow? source)
     {
-        var mapping = _settings.Current.Mapping;
-        var savedCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (SelectedProject is not null)
+        var key = source?.TableName;
+        ShowCaratoneDates = BuiltInSyncQueries.IsCaratoneDated(key);
+        if (ShowCaratoneDates && SelectedProject is not null)
+            SelectedProject.EnsureCaratoneDatesDefaultToday();
+
+        SelectionSummary = source is null
+            ? "No source selected"
+            : ShowCaratoneDates
+                ? $"Source: {source.TableName} — dates default to PC today for daily sync"
+                : $"Source: {source.TableName}";
+    }
+
+    private string? CurrentSourceKey() =>
+        SelectedSource?.TableName is { Length: > 0 } t && BuiltInSyncQueries.IsFixedSource(t)
+            ? t
+            : null;
+
+    private List<DestinationFormatField> BuildFormatFields(string table)
+    {
+        IReadOnlyList<string> headers =
+            BuiltInSyncQueries.IsInventoryFamily(table) ? BuiltInSyncQueries.InventoryHeaders
+            : BuiltInSyncQueries.IsProductsFamily(table) ? BuiltInSyncQueries.ProductHeaders
+            : BuiltInSyncQueries.IsCaratoneSale(table) ? CaratoneSaleSql.Headers
+            : BuiltInSyncQueries.IsCaratonePayment(table) ? CaratonePaymentSql.Headers
+            : Array.Empty<string>();
+
+        if (headers.Count == 0 && PreviewView?.Table is { } dt)
+            headers = dt.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
+
+        return headers.Select(h => new DestinationFormatField
         {
-            foreach (var f in SelectedProject.FormatFields.Where(f => f.Enabled))
-            {
-                var key = string.IsNullOrWhiteSpace(f.SourceField) ? f.DestinationKey : f.SourceField;
-                if (!string.IsNullOrWhiteSpace(key))
-                    savedCols.Add(key.Trim());
-            }
+            SourceField = $"{table}.{h}",
+            DestinationKey = h,
+            Enabled = true
+        }).ToList();
+    }
+
+    private static DataTable ToDataTable(IReadOnlyList<Dictionary<string, object?>> rows, IReadOnlyList<string>? preferHeaders)
+    {
+        var table = new DataTable();
+        if (rows.Count == 0 && preferHeaders is { Count: > 0 })
+        {
+            foreach (var h in preferHeaders)
+                table.Columns.Add(h);
+            return table;
         }
 
-        _allColumns = new List<DestColumnRow>();
-        foreach (var key in BuiltInSyncQueries.AllKeys)
+        var cols = preferHeaders is { Count: > 0 }
+            ? preferHeaders.ToList()
+            : rows.SelectMany(r => r.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        foreach (var c in cols)
+            table.Columns.Add(c);
+
+        foreach (var row in rows)
         {
-            if (!mapping.TableColumns.TryGetValue(key, out var cols) || cols.Count == 0)
-                continue;
-            foreach (var col in cols.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            var dr = table.NewRow();
+            foreach (DataColumn col in table.Columns)
             {
-                var full = $"{key}.{col}";
-                _allColumns.Add(new DestColumnRow
-                {
-                    TableName = key,
-                    ColumnName = col,
-                    IsSelected = savedCols.Count == 0 || savedCols.Contains(full) || savedCols.Contains(col)
-                });
+                if (row.TryGetValue(col.ColumnName, out var v) && v is not null)
+                    dr[col.ColumnName] = v;
+                else
+                    dr[col.ColumnName] = DBNull.Value;
             }
+            table.Rows.Add(dr);
         }
-        RefreshColumnsView();
-    }
 
-    private void RefreshColumnsView()
-    {
-        Columns.Clear();
-        var selected = new HashSet<string>(
-            Tables.Where(t => t.IsSelected).Select(t => t.TableName),
-            StringComparer.OrdinalIgnoreCase);
-        foreach (var c in _allColumns
-                     .Where(c => selected.Count == 0 || selected.Contains(c.TableName))
-                     .OrderBy(c => c.TableName, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(c => c.ColumnName, StringComparer.OrdinalIgnoreCase))
-            Columns.Add(c);
-        RefreshSummary();
-    }
-
-    private void RefreshSummary()
-    {
-        var t = Tables.Count(x => x.IsSelected);
-        var sel = new HashSet<string>(Tables.Where(x => x.IsSelected).Select(x => x.TableName), StringComparer.OrdinalIgnoreCase);
-        var c = _allColumns.Count(x => x.IsSelected && (sel.Count == 0 || sel.Contains(x.TableName)));
-        SelectionSummary = c == 0
-            ? $"{t} source(s) selected — all fields will sync"
-            : $"{t} source(s), {c} field(s) selected";
+        return table;
     }
 
     [RelayCommand]
-    private void SelectAllTables()
+    private async Task LoadPreviewAsync()
     {
-        foreach (var t in Tables) t.IsSelected = true;
-        RefreshColumnsView();
-        StatusMessage = "All 3 sources selected.";
-    }
-
-    [RelayCommand]
-    private void SelectNoneTables()
-    {
-        foreach (var t in Tables) t.IsSelected = false;
-        RefreshColumnsView();
-        StatusMessage = "No sources selected.";
-    }
-
-    [RelayCommand]
-    private void ApplyTableTicks() => RefreshColumnsView();
-
-    [RelayCommand]
-    private async Task LoadFieldsAsync()
-    {
-        var selected = Tables.Where(t => t.IsSelected).Select(t => t.TableName).ToList();
-        if (selected.Count == 0)
+        var table = CurrentSourceKey();
+        if (table is null)
         {
-            StatusMessage = "Tick at least one source (sales / inventory / payments), then Load fields.";
+            PreviewView = null;
+            StatusMessage = "Pick a source from the dropdown.";
             return;
         }
 
+        if (SelectedProject is null)
+        {
+            StatusMessage = "Select a project first.";
+            return;
+        }
+
+        if (IsBusy) return;
+        IsBusy = true;
+        string? restoreSql = null;
         try
         {
-            BuiltInSyncQueries.EnsureDefaults(_settings.Current.Mapping);
-            StatusMessage = $"Loading fields for {selected.Count} source(s) from database…";
-            var prev = new HashSet<string>(
-                _allColumns.Where(c => c.IsSelected).Select(c => $"{c.TableName}.{c.ColumnName}"),
-                StringComparer.OrdinalIgnoreCase);
-            if (prev.Count == 0 && SelectedProject is not null)
+            StatusMessage = $"Loading preview for {table}…";
+            if (BuiltInSyncQueries.IsCaratoneDated(table))
             {
-                foreach (var f in SelectedProject.FormatFields.Where(f => f.Enabled))
-                {
-                    var key = string.IsNullOrWhiteSpace(f.SourceField) ? f.DestinationKey : f.SourceField;
-                    if (!string.IsNullOrWhiteSpace(key)) prev.Add(key.Trim());
-                }
+                SelectedProject.EnsureCaratoneDatesDefaultToday();
+                SelectedProject.TryGetSaleReportDates(out var from, out var to);
+                var mapping = _settings.Current.Mapping;
+                BuiltInSyncQueries.EnsureDefaults(mapping);
+                restoreSql = mapping.TableQueries.TryGetValue(table, out var prev) ? prev : null;
+                mapping.TableQueries[table] = BuiltInSyncQueries.IsCaratonePayment(table)
+                    ? CaratonePaymentSql.ApplyDates(CaratonePaymentSql.Template, from, to)
+                    : CaratoneSaleSql.ApplyDates(CaratoneSaleSql.Template, from, to);
             }
 
-            var next = _allColumns
-                .Where(c => !selected.Contains(c.TableName, StringComparer.OrdinalIgnoreCase))
-                .ToList();
-            var cache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var rows = await _products.ReadTableRowsAsync(table, PreviewRowLimit, 0).ConfigureAwait(true);
+            IReadOnlyList<string>? headers =
+                BuiltInSyncQueries.IsCaratonePayment(table) ? CaratonePaymentSql.Headers
+                : BuiltInSyncQueries.IsCaratoneSale(table) ? CaratoneSaleSql.Headers
+                : BuiltInSyncQueries.IsInventoryFamily(table) ? BuiltInSyncQueries.InventoryHeaders
+                : BuiltInSyncQueries.IsProductsFamily(table) ? BuiltInSyncQueries.ProductHeaders
+                : null;
 
-            foreach (var table in selected)
-            {
-                IReadOnlyList<string> cols =
-                    BuiltInSyncQueries.IsInventoryFamily(table) ? BuiltInSyncQueries.InventoryHeaders
-                    : BuiltInSyncQueries.IsProductsFamily(table) ? BuiltInSyncQueries.ProductHeaders
-                    : BuiltInSyncQueries.IsCaratoneSale(table) ? CaratoneSaleSql.Headers
-                    : BuiltInSyncQueries.IsCaratonePayment(table) ? CaratonePaymentSql.Headers
-                    : await _products.ListTableColumnsAsync(table).ConfigureAwait(true);
-                cache[table] = cols.ToList();
-                foreach (var col in cols)
-                {
-                    var full = $"{table}.{col}";
-                    next.Add(new DestColumnRow
-                    {
-                        TableName = table,
-                        ColumnName = col,
-                        IsSelected = true
-                    });
-                }
-            }
+            var projected = headers is not null
+                ? MarketplaceCatalogMapper.OrderTemplateColumns(rows.ToList(), headers)
+                : rows.ToList();
 
-            _allColumns = next;
-            _settings.Update(s =>
-            {
-                BuiltInSyncQueries.EnsureDefaults(s.Mapping);
-                foreach (var kv in cache)
-                    s.Mapping.TableColumns[kv.Key] = kv.Value;
-                s.Mapping.TableColumns[BuiltInSyncQueries.Inventory] = BuiltInSyncQueries.InventoryHeaders.ToList();
-                s.Mapping.TableColumns[BuiltInSyncQueries.InventoryTest] = BuiltInSyncQueries.InventoryHeaders.ToList();
-                s.Mapping.TableColumns[BuiltInSyncQueries.Products] = BuiltInSyncQueries.ProductHeaders.ToList();
-                s.Mapping.TableColumns[BuiltInSyncQueries.ProductsTest] = BuiltInSyncQueries.ProductHeaders.ToList();
-                s.Mapping.TableColumns[BuiltInSyncQueries.CaratoneSale] = CaratoneSaleSql.Headers.ToList();
-                s.Mapping.TableColumns[BuiltInSyncQueries.CaratonePayment] = CaratonePaymentSql.Headers.ToList();
-            });
-            await _settings.SaveAsync().ConfigureAwait(true);
-            RefreshColumnsView();
-            StatusMessage = selected.Any(BuiltInSyncQueries.IsCaratonePayment)
-                ? "caratone-payment: 15 payment headers. Set single/range dates → Save → Full Sync."
-                : selected.Any(BuiltInSyncQueries.IsCaratoneSale)
-                ? "caratone-sale: 25 report headers. Set single/range dates → Save → Full Sync."
-                : selected.Any(t => t.Equals(BuiltInSyncQueries.ProductsTest, StringComparison.OrdinalIgnoreCase))
-                ? "marketplace-products-test: TOP 3,000. Save → Full Sync to verify API, then use FULL."
-                : selected.Any(BuiltInSyncQueries.IsProductsFamily)
-                ? "marketplace-products: 35 catalog headers pinned. Save → Full Sync (one CSV)."
-                : selected.Any(BuiltInSyncQueries.IsInventoryFamily)
-                ? "Inventory fields pinned (8 headers). marketplace-inv-test = 10k test. Save → Full Sync."
-                : $"Loaded {_allColumns.Count(c => selected.Contains(c.TableName, StringComparer.OrdinalIgnoreCase))} field(s). Save when ready.";
+            var dt = ToDataTable(projected, headers);
+            PreviewView = dt.DefaultView;
+            SelectionSummary = $"{table}: showing {dt.Rows.Count} row(s) × {dt.Columns.Count} col(s) (preview)";
+            StatusMessage = dt.Rows.Count == 0
+                ? $"{table}: no rows for current filter/dates."
+                : $"{table}: preview loaded ({dt.Rows.Count} rows).";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Failed to load fields: {ex.Message}";
+            PreviewView = null;
+            StatusMessage = $"Preview failed: {ex.Message}";
         }
-    }
-
-    [RelayCommand]
-    private void SelectAllFields()
-    {
-        var visible = new HashSet<string>(Columns.Select(c => $"{c.TableName}.{c.ColumnName}"), StringComparer.OrdinalIgnoreCase);
-        foreach (var c in _allColumns)
-            if (visible.Contains($"{c.TableName}.{c.ColumnName}"))
-                c.IsSelected = true;
-        RefreshColumnsView();
-        StatusMessage = $"All {Columns.Count} field(s) selected.";
-    }
-
-    [RelayCommand]
-    private void SelectNoneFields()
-    {
-        var visible = new HashSet<string>(Columns.Select(c => $"{c.TableName}.{c.ColumnName}"), StringComparer.OrdinalIgnoreCase);
-        foreach (var c in _allColumns)
-            if (visible.Contains($"{c.TableName}.{c.ColumnName}"))
-                c.IsSelected = false;
-        RefreshColumnsView();
-        StatusMessage = "Fields cleared — sync will send all columns of selected sources.";
+        finally
+        {
+            if (restoreSql is not null)
+                _settings.Current.Mapping.TableQueries[table] = restoreSql;
+            IsBusy = false;
+        }
     }
 
     [RelayCommand]
     private async Task ExportSelectedCsvAsync()
     {
-        var selected = Tables.Where(t => t.IsSelected).Select(t => t.TableName).ToList();
-        if (selected.Count == 0)
+        var table = CurrentSourceKey();
+        if (table is null)
         {
-            StatusMessage = "Tick at least one source, then Export CSV.";
+            StatusMessage = "Pick a source, then Export CSV.";
             MessageBox.Show(StatusMessage, "Export CSV", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        BuiltInSyncQueries.EnsureDefaults(_settings.Current.Mapping);
+        if (IsBusy) return;
+        IsBusy = true;
 
-        // Auto path — no folder picker. One CSV per selected source.
+        BuiltInSyncQueries.EnsureDefaults(_settings.Current.Mapping);
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var folder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -329,104 +301,97 @@ public partial class DestinationsViewModel : ObservableObject
             "csv-export",
             stamp);
         Directory.CreateDirectory(folder);
+        var fileName = $"{table}_{stamp}.csv";
+        var path = Path.Combine(folder, fileName);
 
-        var batchSize = Math.Clamp(_settings.Current.Sync.BatchSize, 50, 500);
-        var ok = 0;
-        var fail = 0;
-        var totalRows = 0;
-        var files = new List<string>();
-
-        if (selected.Any(BuiltInSyncQueries.IsCaratoneDated)
-            && (SelectedProject is null || !SelectedProject.TryGetSaleReportDates(out _, out _)))
+        string? restoreSql = null;
+        try
         {
-            StatusMessage = "caratone-sale / caratone-payment needs From date (and To if range). Set dates → Save → Export.";
-            MessageBox.Show(StatusMessage, "Export CSV", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        StatusMessage = $"Exporting {selected.Count} source(s) to Documents\\VallianiDataSync\\csv-export\\{stamp}…";
-
-        foreach (var table in selected)
-        {
-            string? restoreSql = null;
-            try
+            if (BuiltInSyncQueries.IsCaratoneDated(table) && SelectedProject is not null)
             {
-                if (BuiltInSyncQueries.IsCaratoneDated(table) && SelectedProject is not null
-                    && SelectedProject.TryGetSaleReportDates(out var saleFrom, out var saleTo))
+                SelectedProject.EnsureCaratoneDatesDefaultToday();
+                SelectedProject.TryGetSaleReportDates(out var saleFrom, out var saleTo);
+                var mapping = _settings.Current.Mapping;
+                BuiltInSyncQueries.EnsureDefaults(mapping);
+                restoreSql = mapping.TableQueries.TryGetValue(table, out var prev) ? prev : null;
+                mapping.TableQueries[table] = BuiltInSyncQueries.IsCaratonePayment(table)
+                    ? CaratonePaymentSql.ApplyDates(CaratonePaymentSql.Template, saleFrom, saleTo)
+                    : CaratoneSaleSql.ApplyDates(CaratoneSaleSql.Template, saleFrom, saleTo);
+            }
+
+            StatusMessage = $"Exporting {table} → {fileName}…";
+
+            IReadOnlyList<string>? orderedHeaders =
+                BuiltInSyncQueries.IsCaratonePayment(table) ? CaratonePaymentSql.Headers
+                : BuiltInSyncQueries.IsCaratoneSale(table) ? CaratoneSaleSql.Headers
+                : BuiltInSyncQueries.IsInventoryFamily(table) ? BuiltInSyncQueries.InventoryHeaders
+                : BuiltInSyncQueries.IsProductsFamily(table) ? BuiltInSyncQueries.ProductHeaders
+                : null;
+
+            var totalRows = 0;
+            await using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read))
+            await using (var writer = new StreamWriter(fs, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true)))
+            {
+                var headerWritten = false;
+                var keys = orderedHeaders?.ToList() ?? new List<string>();
+
+                await foreach (var batch in _products.StreamTableRowsAsync(table, 2000).ConfigureAwait(true))
                 {
-                    var mapping = _settings.Current.Mapping;
-                    BuiltInSyncQueries.EnsureDefaults(mapping);
-                    restoreSql = mapping.TableQueries.TryGetValue(table, out var prev) ? prev : null;
-                    mapping.TableQueries[table] = BuiltInSyncQueries.IsCaratonePayment(table)
-                        ? CaratonePaymentSql.ApplyDates(CaratonePaymentSql.Template, saleFrom, saleTo)
-                        : CaratoneSaleSql.ApplyDates(CaratoneSaleSql.Template, saleFrom, saleTo);
+                    IReadOnlyList<Dictionary<string, object?>> projected = orderedHeaders is not null
+                        ? MarketplaceCatalogMapper.OrderTemplateColumns(batch.ToList(), orderedHeaders)
+                        : batch;
+
+                    if (!headerWritten)
+                    {
+                        if (keys.Count == 0)
+                        {
+                            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var row in projected)
+                            foreach (var k in row.Keys)
+                                if (seen.Add(k)) keys.Add(k);
+                            keys.Sort(StringComparer.OrdinalIgnoreCase);
+                        }
+                        if (keys.Count == 0)
+                            throw new InvalidOperationException("No columns returned from SQL for this source.");
+                        ProductFormatExporter.WriteCsvHeader(writer, keys);
+                        headerWritten = true;
+                    }
+
+                    ProductFormatExporter.WriteCsvRows(writer, projected, keys);
+                    totalRows += projected.Count;
+                    StatusMessage = $"Exporting {table}… {totalRows:N0} rows written";
+                    await writer.FlushAsync().ConfigureAwait(true);
                 }
 
-                var rows = new List<Dictionary<string, object?>>();
-                await foreach (var batch in _products.StreamTableRowsAsync(table, Math.Max(batchSize, 2000))
-                                   .ConfigureAwait(true))
+                if (!headerWritten)
                 {
-                    rows.AddRange(batch);
+                    if (keys.Count == 0)
+                        keys.Add("empty");
+                    ProductFormatExporter.WriteCsvHeader(writer, keys);
                 }
+            }
 
-                IReadOnlyList<string>? orderedHeaders =
-                    BuiltInSyncQueries.IsCaratonePayment(table) ? CaratonePaymentSql.Headers
-                    : BuiltInSyncQueries.IsCaratoneSale(table) ? CaratoneSaleSql.Headers
-                    : null;
-                var projected = orderedHeaders is not null
-                    ? MarketplaceCatalogMapper.OrderTemplateColumns(rows, orderedHeaders)
-                    : ProjectLocal(table, rows);
-                var fileName = $"{table}_{stamp}.csv";
-                var path = Path.Combine(folder, fileName);
-                var csv = orderedHeaders is not null
-                    ? ProductFormatExporter.ToCsvOrdered(projected, orderedHeaders)
-                    : ProductFormatExporter.ToCsvAllColumns(projected);
-                await File.WriteAllTextAsync(path, csv).ConfigureAwait(true);
-                ok++;
-                totalRows += projected.Count;
-                files.Add(fileName);
-                StatusMessage = $"Exported {ok}/{selected.Count}: {fileName} ({projected.Count} rows)…";
-            }
-            catch (Exception ex)
-            {
-                fail++;
-                var err = ex.Message.Length <= 60 ? ex.Message : ex.Message[..60] + "…";
-                files.Add($"{table}: FAILED ({err})");
-            }
-            finally
-            {
-                if (restoreSql is not null)
-                    _settings.Current.Mapping.TableQueries[table] = restoreSql;
-            }
+            StatusMessage = $"CSV export done: {totalRows:N0} row(s).\n{path}";
+            MessageBox.Show($"{fileName}\n{totalRows:N0} rows\n\n{folder}", "Export CSV",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            try { Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true }); }
+            catch { /* ignore */ }
         }
-
-        var result = $"CSV export done: {ok} file(s), {totalRows} row(s)" +
-                     (fail > 0 ? $", {fail} failed." : ".") +
-                     $"\n\nFolder:\n{folder}\n\nFiles:\n" + string.Join("\n", files);
-        StatusMessage = $"CSV export done: {ok} file(s), {totalRows} row(s). Folder: {folder}";
-        MessageBox.Show(result, "Export CSV", MessageBoxButton.OK,
-            fail > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
-
-        try { Process.Start(new ProcessStartInfo { FileName = folder, UseShellExecute = true }); }
-        catch { /* ignore */ }
-    }
-
-    private List<Dictionary<string, object?>> ProjectLocal(string table, List<Dictionary<string, object?>> rows)
-    {
-        var fields = _allColumns
-            .Where(c => c.IsSelected && c.TableName.Equals(table, StringComparison.OrdinalIgnoreCase))
-            .Select(c => c.ColumnName)
-            .ToList();
-        if (fields.Count == 0)
-            return rows;
-        return rows.Select(r =>
+        catch (Exception ex)
         {
-            var d = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var f in fields)
-                if (r.TryGetValue(f, out var v))
-                    d[f] = v;
-            return d;
-        }).ToList();
+            try { if (File.Exists(path) && new FileInfo(path).Length == 0) File.Delete(path); } catch { /* ignore */ }
+            StatusMessage = $"Export failed: {ex.Message}";
+            MessageBox.Show(
+                "Export CSV failed.\n\n" + ex.Message +
+                "\n\nCheck Database connection (Server / Database page), then try again.",
+                "Export CSV", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            if (restoreSql is not null)
+                _settings.Current.Mapping.TableQueries[table] = restoreSql;
+            IsBusy = false;
+        }
     }
 
     [RelayCommand]
@@ -435,12 +400,18 @@ public partial class DestinationsViewModel : ObservableObject
         if (!await EnsureOtpIfNeededAsync("Admin: create destination").ConfigureAwait(true))
             return;
 
+        var defaultSource = BuiltInSyncQueries.DefaultKeys.FirstOrDefault()
+                            ?? BuiltInSyncQueries.AllKeys.FirstOrDefault()
+                            ?? "inventory";
         var project = new DestinationProject
         {
             Name = $"Project {Projects.Count + 1}",
             IntervalMinutes = 120,
-            SyncSources = BuiltInSyncQueries.DefaultKeys.ToList(),
-            FormatFields = new List<DestinationFormatField>()
+            SyncSources = new List<string> { defaultSource },
+            FormatFields = new List<DestinationFormatField>(),
+            SaleReportDateFrom = DateTime.Today,
+            SaleReportDateTo = DateTime.Today,
+            SaleDateIsRange = false
         };
         _settings.Update(s =>
         {
@@ -450,7 +421,7 @@ public partial class DestinationsViewModel : ObservableObject
         await _settings.SaveAsync();
         Projects.Add(project);
         SelectedProject = project;
-        StatusMessage = "Project created. For quick test tick marketplace-inv-test only; then Inventory FULL.";
+        StatusMessage = "Project created — pick one source from the dropdown.";
     }
 
     [RelayCommand]
@@ -480,88 +451,17 @@ public partial class DestinationsViewModel : ObservableObject
         if (!await EnsureOtpIfNeededAsync("Admin: save destination / API").ConfigureAwait(true))
             return;
 
-        var selectedTables = Tables.Where(t => t.IsSelected).Select(t => t.TableName)
-            .Where(BuiltInSyncQueries.IsFixedSource)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (selectedTables.Count == 0)
+        var table = CurrentSourceKey();
+        if (table is null)
         {
-            StatusMessage = "Select at least one source (sales / inventory / products / caratone-sale / caratone-payment / payments).";
+            StatusMessage = "Pick one source from the dropdown, then Save.";
             return;
         }
 
-        if (selectedTables.Any(BuiltInSyncQueries.IsCaratoneDated)
-            && !SelectedProject.TryGetSaleReportDates(out _, out _))
-        {
-            StatusMessage = "caratone-sale / caratone-payment: pick From date (or range + To), then Save.";
-            return;
-        }
+        if (BuiltInSyncQueries.IsCaratoneDated(table))
+            SelectedProject.EnsureCaratoneDatesDefaultToday();
 
-        // Template sources → fixed headers only
-        var selectedCols = new List<DestinationFormatField>();
-        foreach (var invKey in selectedTables.Where(BuiltInSyncQueries.IsInventoryFamily))
-        {
-            foreach (var h in BuiltInSyncQueries.InventoryHeaders)
-            {
-                selectedCols.Add(new DestinationFormatField
-                {
-                    SourceField = $"{invKey}.{h}",
-                    DestinationKey = h,
-                    Enabled = true
-                });
-            }
-        }
-        foreach (var prodKey in selectedTables.Where(BuiltInSyncQueries.IsProductsFamily))
-        {
-            foreach (var h in BuiltInSyncQueries.ProductHeaders)
-            {
-                selectedCols.Add(new DestinationFormatField
-                {
-                    SourceField = $"{prodKey}.{h}",
-                    DestinationKey = h,
-                    Enabled = true
-                });
-            }
-        }
-        foreach (var saleKey in selectedTables.Where(BuiltInSyncQueries.IsCaratoneSale))
-        {
-            foreach (var h in CaratoneSaleSql.Headers)
-            {
-                selectedCols.Add(new DestinationFormatField
-                {
-                    SourceField = $"{saleKey}.{h}",
-                    DestinationKey = h,
-                    Enabled = true
-                });
-            }
-        }
-        foreach (var payKey in selectedTables.Where(BuiltInSyncQueries.IsCaratonePayment))
-        {
-            foreach (var h in CaratonePaymentSql.Headers)
-            {
-                selectedCols.Add(new DestinationFormatField
-                {
-                    SourceField = $"{payKey}.{h}",
-                    DestinationKey = h,
-                    Enabled = true
-                });
-            }
-        }
-        foreach (var c in _allColumns.Where(c =>
-                     c.IsSelected
-                     && selectedTables.Contains(c.TableName, StringComparer.OrdinalIgnoreCase)
-                     && !BuiltInSyncQueries.IsInventoryFamily(c.TableName)
-                     && !BuiltInSyncQueries.IsProductsFamily(c.TableName)
-                     && !BuiltInSyncQueries.IsCaratoneDated(c.TableName)))
-        {
-            selectedCols.Add(new DestinationFormatField
-            {
-                SourceField = $"{c.TableName}.{c.ColumnName}",
-                DestinationKey = c.ColumnName,
-                Enabled = true
-            });
-        }
-
+        var selectedCols = BuildFormatFields(table);
         var id = SelectedProject.Id;
         var typedKey = ApiKey?.Trim() ?? "";
         var keepExistingKey = typedKey.Length == 0 || typedKey == ApiKeySavedMask;
@@ -581,18 +481,18 @@ public partial class DestinationsViewModel : ObservableObject
             p.BodyFormat = p.ApiUrl.Contains("sku-inventory", StringComparison.OrdinalIgnoreCase)
                            || p.ApiUrl.Contains("import", StringComparison.OrdinalIgnoreCase)
                            || p.ApiUrl.Contains("vendor-catalog", StringComparison.OrdinalIgnoreCase)
-                           || selectedTables.Any(BuiltInSyncQueries.WantsSingleFileSource)
+                           || BuiltInSyncQueries.WantsSingleFileSource(table)
                 ? "Csv"
                 : (string.IsNullOrWhiteSpace(SelectedProject.BodyFormat) ? "JsonArray" : SelectedProject.BodyFormat);
             p.AuthHeaderName = "Authorization";
             p.AuthHeaderPrefix = "Bearer ";
-            p.SyncSources = selectedTables;
+            p.SyncSources = new List<string> { table };
             p.FormatFields = selectedCols;
             p.SaleDateIsRange = SelectedProject.SaleDateIsRange;
-            p.SaleReportDateFrom = SelectedProject.SaleReportDateFrom;
+            p.SaleReportDateFrom = SelectedProject.SaleReportDateFrom ?? DateTime.Today;
             p.SaleReportDateTo = SelectedProject.SaleDateIsRange
-                ? SelectedProject.SaleReportDateTo
-                : SelectedProject.SaleReportDateFrom;
+                ? (SelectedProject.SaleReportDateTo ?? p.SaleReportDateFrom)
+                : p.SaleReportDateFrom;
         });
 
         if (!keepExistingKey)
@@ -601,14 +501,11 @@ public partial class DestinationsViewModel : ObservableObject
         await _settings.SaveAsync();
         Load();
         SelectedProject = Projects.FirstOrDefault(p => p.Id == id);
-        // Keep mask visible so it does not look like the token was deleted
         if (SelectedProject is not null && _credentials.HasSecret(CredentialKeys.DestinationApiKey(id)))
             ApiKey = ApiKeySavedMask;
 
         StatusMessage = _credentials.HasSecret(CredentialKeys.DestinationApiKey(id))
-            ? selectedTables.Any(BuiltInSyncQueries.IsProductsFamily)
-                ? "Saved. Token on file (••••). marketplace-products: 35-col catalog → one CSV Full Sync."
-                : $"Saved. Token on file (••••). Inventory headers: {string.Join(", ", BuiltInSyncQueries.InventoryHeaders)}."
+            ? $"Saved. Source={table}. Token on file (••••)."
             : "Saved — WARNING: paste API token then Save again.";
     }
 
@@ -636,31 +533,20 @@ public partial class DestinationsViewModel : ObservableObject
             return;
         }
 
-        // Persist current ticks so sync matches what you see on screen
-        var selectedTables = Tables.Where(t => t.IsSelected).Select(t => t.TableName)
-            .Where(BuiltInSyncQueries.IsFixedSource)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (selectedTables.Count == 0)
+        var table = CurrentSourceKey();
+        if (table is null)
         {
-            StatusMessage = "Tick at least one source (sales / inventory / payments), then Sync.";
+            StatusMessage = "Pick one source from the dropdown, then Sync.";
             MessageBox.Show(StatusMessage, "Destination sync", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        var selectedCols = _allColumns
-            .Where(c => c.IsSelected && selectedTables.Contains(c.TableName, StringComparer.OrdinalIgnoreCase))
-            .Select(c => new DestinationFormatField
-            {
-                SourceField = $"{c.TableName}.{c.ColumnName}",
-                DestinationKey = c.ColumnName,
-                Enabled = true
-            })
-            .ToList();
+        if (BuiltInSyncQueries.IsCaratoneDated(table))
+            SelectedProject.EnsureCaratoneDatesDefaultToday();
 
+        var selectedCols = BuildFormatFields(table);
         var id = SelectedProject.Id;
         var apiUrl = SelectedProject.ApiUrl.Trim();
-        // Marketplace import URLs expect CSV upload; otherwise keep JsonArray
         var bodyFormat = apiUrl.Contains("import", StringComparison.OrdinalIgnoreCase)
                          || apiUrl.Contains("vendor-catalog", StringComparison.OrdinalIgnoreCase)
             ? "Csv"
@@ -674,14 +560,17 @@ public partial class DestinationsViewModel : ObservableObject
             p.Enabled = true;
             p.ApiUrl = apiUrl;
             p.BodyFormat = bodyFormat;
-            p.SyncSources = selectedTables;
-            p.FormatFields = selectedCols; // empty = all columns of selected sources
+            p.SyncSources = new List<string> { table };
+            p.FormatFields = selectedCols;
+            p.SaleDateIsRange = SelectedProject.SaleDateIsRange;
+            p.SaleReportDateFrom = SelectedProject.SaleReportDateFrom ?? DateTime.Today;
+            p.SaleReportDateTo = SelectedProject.SaleDateIsRange
+                ? (SelectedProject.SaleReportDateTo ?? p.SaleReportDateFrom)
+                : p.SaleReportDateFrom;
         });
         await _settings.SaveAsync();
 
-        StatusMessage = fullSync
-            ? $"Full sync {selectedTables.Count} source(s) to live API…"
-            : $"Syncing {selectedTables.Count} source(s) to live API…";
+        StatusMessage = fullSync ? $"Full sync {table}…" : $"Syncing {table}…";
 
         var progress = new Progress<string>(msg =>
         {
@@ -690,7 +579,6 @@ public partial class DestinationsViewModel : ObservableObject
                 SelectedProject.LastSyncMessage = msg;
         });
         var (ok, message, sent, skipped) = await _sync.SyncProjectAsync(id, fullSync: fullSync, progress: progress);
-        // message = full SYNC REPORT (per-source OK / SKIPPED / FAILED + why)
         var title = !ok
             ? "Destination sync — errors"
             : sent == 0 && skipped > 0

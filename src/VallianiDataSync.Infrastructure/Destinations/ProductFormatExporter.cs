@@ -83,6 +83,21 @@ public static class ProductFormatExporter
     public static string ToCsvOrdered(IReadOnlyList<Dictionary<string, object?>> rows, IReadOnlyList<string> headers)
         => BuildCsv(rows, headers);
 
+    public static void WriteCsvHeader(TextWriter writer, IReadOnlyList<string> keys)
+        => writer.WriteLine(string.Join(",", keys.Select(EscapeCsv)));
+
+    public static void WriteCsvRows(TextWriter writer, IEnumerable<Dictionary<string, object?>> rows, IReadOnlyList<string> keys)
+    {
+        foreach (var row in rows)
+        {
+            writer.WriteLine(string.Join(",", keys.Select(k =>
+            {
+                row.TryGetValue(k, out var v);
+                return EscapeCsv(Convert.ToString(v, CultureInfo.InvariantCulture) ?? string.Empty);
+            })));
+        }
+    }
+
     private static string BuildCsv(IReadOnlyList<Dictionary<string, object?>> rows, IReadOnlyList<string> keys)
     {
         var sb = new StringBuilder();

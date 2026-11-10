@@ -1,7 +1,11 @@
-﻿using System.IO;
+﻿using System.Globalization;
+using System.IO;
 using System.Text;
+using System.Threading;
 using System.Windows;
+using System.Windows.Markup;
 using System.Windows.Threading;
+using HandyControl.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -18,6 +22,18 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // HandyControl defaults to Chinese — force English app-wide
+        var en = CultureInfo.GetCultureInfo("en-US");
+        CultureInfo.DefaultThreadCurrentCulture = en;
+        CultureInfo.DefaultThreadCurrentUICulture = en;
+        Thread.CurrentThread.CurrentCulture = en;
+        Thread.CurrentThread.CurrentUICulture = en;
+        FrameworkElement.LanguageProperty.OverrideMetadata(
+            typeof(FrameworkElement),
+            new FrameworkPropertyMetadata(XmlLanguage.GetLanguage(en.IetfLanguageTag)));
+        try { ConfigHelper.Instance.SetLang("en"); }
+        catch { /* older HC builds */ }
+
         base.OnStartup(e);
 
         DispatcherUnhandledException += (_, args) =>

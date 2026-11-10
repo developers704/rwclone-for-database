@@ -28,8 +28,8 @@ public static class CaratonePaymentSql
     }
 
     public const string Template = """
-DECLARE @StartDate DATE = '{{StartDate}}';
-DECLARE @EndDate DATE = '{{EndDate}}';
+DECLARE @StartDate DATE = CONVERT(date, '{{StartDate}}', 23);
+DECLARE @EndDate DATE = CONVERT(date, '{{EndDate}}', 23);
 
 WITH ActiveAllocations AS
 (

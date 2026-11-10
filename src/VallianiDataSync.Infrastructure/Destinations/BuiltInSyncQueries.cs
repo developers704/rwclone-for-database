@@ -21,12 +21,13 @@ public static class BuiltInSyncQueries
     public const string CaratonePayment = "caratone-payment";
     public const string Payments = "payments";
 
+    /// <summary>Sources shown in Destinations dropdown (sales/payments removed — use caratone-*).</summary>
     public static IReadOnlyList<string> AllKeys { get; } =
-        new[] { Sales, Inventory, InventoryTest, Products, ProductsTest, CaratoneSale, CaratonePayment, Payments };
+        new[] { Inventory, InventoryTest, Products, ProductsTest, CaratoneSale, CaratonePayment };
 
-    /// <summary>Default ticks for new projects (exclude test + products + caratone until user ticks).</summary>
+    /// <summary>Default source for new projects.</summary>
     public static IReadOnlyList<string> DefaultKeys { get; } =
-        new[] { Sales, Inventory, Payments };
+        new[] { Inventory };
 
     public static string DisplayName(string key) => key.ToLowerInvariant() switch
     {
@@ -652,14 +653,13 @@ ORDER BY
         mapping.SelectedTables.RemoveAll(string.IsNullOrWhiteSpace);
         mapping.DiscoveredColumns.RemoveAll(string.IsNullOrWhiteSpace);
 
-        mapping.TableQueries[Sales] = SalesSql;
         mapping.TableQueries[Inventory] = InventorySql;
         mapping.TableQueries[InventoryTest] = InventoryTestSql;
         mapping.TableQueries[Products] = ProductsSql;
         mapping.TableQueries[ProductsTest] = ProductsTestSql;
-        mapping.TableQueries[CaratoneSale] = CaratoneSaleSql.Template;
-        mapping.TableQueries[CaratonePayment] = CaratonePaymentSql.Template;
-        mapping.TableQueries[Payments] = PaymentsSql;
+        // Do NOT wipe caratone after ApplyDates — only (re)install template when missing or still has {{tokens}}
+        PinQueryTemplate(mapping.TableQueries, CaratoneSale, CaratoneSaleSql.Template);
+        PinQueryTemplate(mapping.TableQueries, CaratonePayment, CaratonePaymentSql.Template);
 
         // Always pin inventory / products / caratone UI fields to template headers
         mapping.TableColumns[Inventory] = InventoryHeaders.ToList();
@@ -694,6 +694,18 @@ ORDER BY
         !string.IsNullOrWhiteSpace(name) &&
         AllKeys.Contains(name.Trim(), StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Install template only when absent or still contains {{placeholders}}.
+    /// Preserves in-memory ApplyDates() result used by caratone preview/sync.
+    /// </summary>
+    private static void PinQueryTemplate(Dictionary<string, string> queries, string key, string template)
+    {
+        if (!queries.TryGetValue(key, out var cur)
+            || string.IsNullOrWhiteSpace(cur)
+            || cur.Contains("{{", StringComparison.Ordinal))
+            queries[key] = template;
+    }
+
     public static bool TryGetQuery(FieldMappingConfig mapping, string name, out string sql)
     {
         sql = "";
@@ -702,6 +714,12 @@ ORDER BY
             return false;
         if (!mapping.TableQueries.TryGetValue(name, out var q) || string.IsNullOrWhiteSpace(q))
             return false;
+        // Caratone DECLARE batches: keep full text (ORDER BY OK). Don't subquery-prep.
+        if (IsCaratoneDated(name) || IsBatchSql(q))
+        {
+            sql = q.Trim().TrimStart(';').TrimEnd(';').Trim();
+            return sql.Length > 0;
+        }
         sql = PrepareSubquery(q);
         return sql.Length > 0;
     }

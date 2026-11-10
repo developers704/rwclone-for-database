@@ -7,10 +7,10 @@
         <Grid>
           <StackPanel>
             <TextBlock Text="VALLIANI" FontFamily="{StaticResource DisplayFont}" FontSize="13" FontWeight="Bold"
-                       Foreground="#B7E4D8" Margin="0,0,0,4"/>
+                       Foreground="#D4AF37" Margin="0,0,0,4"/>
             <TextBlock Text="Dashboard" FontFamily="{StaticResource DisplayFont}" FontSize="30" FontWeight="SemiBold"
-                       Foreground="White"/>
-            <TextBlock Text="{Binding StatusMessage}" Foreground="#D7EFE8" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                       Foreground="#F5EFE4"/>
+            <TextBlock Text="{Binding StatusMessage}" Foreground="#D9CDB8" Margin="0,6,0,0" TextWrapping="Wrap"/>
           </StackPanel>
         </Grid>
       </Border>

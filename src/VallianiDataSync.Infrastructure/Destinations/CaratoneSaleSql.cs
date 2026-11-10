@@ -25,6 +25,7 @@ public static class CaratoneSaleSql
         var to = toInclusive.Date;
         if (to < from)
             (from, to) = (to, from);
+        // Style 23 = yyyy-mm-dd — unambiguous for SQL Server DATE conversion
         var report = from.ToString("yyyy-MM-dd");
         var next = to.AddDays(1).ToString("yyyy-MM-dd");
         return sql
@@ -33,8 +34,8 @@ public static class CaratoneSaleSql
     }
 
     public const string Template = """
-DECLARE @ReportDate DATE = '{{ReportDate}}';
-DECLARE @NextDate   DATE = '{{NextDate}}';
+DECLARE @ReportDate DATE = CONVERT(date, '{{ReportDate}}', 23);
+DECLARE @NextDate   DATE = CONVERT(date, '{{NextDate}}', 23);
 
 ;WITH
 RepairHeaders AS (
